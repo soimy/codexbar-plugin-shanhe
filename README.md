@@ -2,6 +2,8 @@
 
 Third-party provider plugin for Shanhe (`api.0ki.cn`). It stores the API key in CodexBar's secure settings and requests usage from `/v1/usage` by default.
 
+The public API documentation (`/api_docs.php`) documents Bearer authentication and inference endpoints, but does not document a balance or usage endpoint. The default path is therefore provisional and should be overridden with `SHANHE_USAGE_PATH` once the dashboard's request path is confirmed.
+
 ## Install
 
 Copy `shanhe.js` into CodexBar's user provider plugin directory, then configure:

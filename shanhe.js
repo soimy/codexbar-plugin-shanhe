@@ -15,7 +15,9 @@ defineProvider({
     const path = ctx.settings.get("SHANHE_USAGE_PATH") || "/v1/usage";
     const response = await ctx.http.get(`${base}/${path.replace(/^\/+/, "")}`);
     const message = `Shanhe returned HTTP ${response.status}.`;
-    if (response.status === 401 || response.status === 403) throw ctx.fail.authenticationExpired(message);
+    if (response.status === 401) throw ctx.fail.authenticationExpired(message);
+    if (response.status === 403) throw ctx.fail.permissionDenied(message);
+    if (response.status === 402) throw ctx.fail.apiFailure("Shanhe account quota is exhausted.");
     if (response.status === 429) throw ctx.fail.rateLimited(message);
     if (response.status >= 500) throw ctx.fail.providerUnavailable(message);
     if (response.status < 200 || response.status >= 300) throw ctx.fail.apiFailure(message);

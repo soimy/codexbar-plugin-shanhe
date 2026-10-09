@@ -21,3 +21,7 @@
 ### Task 3: Verification
 
 - [ ] Run `node check.mjs` and inspect the final diff.
+
+## Protocol note
+
+The public Shanhe API documentation confirms Bearer authentication but does not expose a billing or usage endpoint. The usage path and response mapping remain configurable until the dashboard network request is identified.
