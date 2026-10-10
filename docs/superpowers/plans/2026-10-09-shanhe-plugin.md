@@ -4,7 +4,7 @@
 
 **Goal:** Add a minimal CodexBar JavaScript provider for Shanhe usage monitoring.
 
-**Architecture:** Use CodexBar's `defineProvider` manifest, secure bearer API-key settings, and one HTTP usage request. Parse a small set of compatible numeric usage shapes and expose one primary usage meter.
+**Architecture:** Use CodexBar's `defineProvider` manifest and browser-cookie session support. Request the server-rendered dashboard with `cookieSession`, parse the visible usage labels, and expose the cycle meter plus dashboard details.
 
 **Tech Stack:** JavaScript, CodexBar provider runtime, Node.js syntax/fixture check.
 
@@ -12,16 +12,16 @@
 
 ### Task 1: Provider
 
-- [x] Create `shanhe.js` with provider metadata, secure API key, configurable endpoint/path, HTTP status handling, JSON parsing, and usage mapping.
+- [x] Create `shanhe.js` with provider metadata, browser-cookie session handling, HTTP status handling, dashboard parsing, and usage mapping.
 
 ### Task 2: Fixture and docs
 
-- [x] Add `fixtures/usage.json`, `check.mjs`, and `README.md` documenting installation and the provisional response contract.
+- [x] Add `fixtures/dashboard.html`, `check.mjs`, and `README.md` documenting browser sign-in and dashboard fields.
 
 ### Task 3: Verification
 
-- [ ] Run `node check.mjs` and inspect the final diff.
+- [x] Run `node check.mjs` and inspect the final diff.
 
 ## Protocol note
 
-The public Shanhe API documentation confirms Bearer authentication but does not expose a billing or usage endpoint. The usage path and response mapping remain configurable until the dashboard network request is identified.
+The public Shanhe API documentation confirms Bearer authentication but does not expose a billing or usage endpoint. The dashboard's server-rendered HTML is the current source of truth; its labels may require parser updates if the vendor changes the page.
