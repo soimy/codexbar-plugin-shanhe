@@ -80,10 +80,6 @@ defineProvider({
     for await (const session of ctx.browser.sessions(domain)) {
       const response = await ctx.http.get("https://api.0ki.cn/dashboard.php", {
         cookieSession: session.id,
-        headers: {
-          Accept: "text/html,application/xhtml+xml",
-          Referer: "https://api.0ki.cn/dashboard.php",
-        },
       });
       if (response.status === 401 || response.status === 403 || response.status === 301 || response.status === 302) {
         ctx.browser.rejectCookie(domain, session);
