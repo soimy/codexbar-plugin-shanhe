@@ -8,7 +8,7 @@ vm.runInNewContext(source, { defineProvider: (value) => { provider = value; } })
 const result = await provider.fetchUsage({
   browser: {
     availability: () => "manual",
-    sessions: async function* () { yield { id: "fixture" }; },
+    sessions: async function* () { yield { id: "fixture", header: "session=fixture" }; },
     acceptCookie: () => {},
     rejectCookie: () => {},
     supportedBrowsers: "Chrome",

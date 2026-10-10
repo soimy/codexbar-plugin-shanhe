@@ -78,8 +78,13 @@ defineProvider({
     if (availability === "off") throw ctx.fail.missingCredential("Shanhe browser cookies are disabled.");
     let rejected = false;
     for await (const session of ctx.browser.sessions(domain)) {
+      if (typeof session.header !== "string" || !session.header.trim()) {
+        ctx.browser.rejectCookie(domain, session);
+        rejected = true;
+        continue;
+      }
       const response = await ctx.http.get("https://api.0ki.cn/dashboard.php", {
-        cookieSession: session.id,
+        headers: { Cookie: session.header },
       });
       if (response.status === 401 || response.status === 403 || response.status === 301 || response.status === 302) {
         ctx.browser.rejectCookie(domain, session);
