@@ -71,12 +71,6 @@ defineProvider({
   settings: [],
   capabilities: ["browser-cookies", "http-status"],
   cookieDomains: ["api.0ki.cn"],
-  cookiePolicy: {
-    selection: "request-url",
-    cache: "nonpersistent",
-    imports: "access-gated",
-    missingCookies: "omit",
-  },
 
   async fetchUsage(ctx) {
     const domain = "api.0ki.cn";
