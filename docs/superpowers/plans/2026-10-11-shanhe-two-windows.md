@@ -5,8 +5,9 @@
 progress bars, the menu bar / Overview icon can follow either window, and the card gains a
 recent-usage bar chart.
 
-**Status:** the two windows and the `icon` are implemented and verified (§7.1, §7.2); the
-recent-usage chart still needs one authenticated `get_daily_stats` sample (see §6).
+**Status:** done — the two windows, the `icon`, and the recent-usage chart are implemented and
+verified (§7.1, §7.2). The chart reads `get_usage_records`; `get_daily_stats` turned out not to be
+needed (§5).
 
 **Progress**
 
@@ -14,11 +15,11 @@ recent-usage chart still needs one authenticated `get_daily_stats` sample (see �
 - [x] Step 2 — snapshot: `primary` (5h, 300 min), `secondary` (month, 43,200 min), details, `icon`.
 - [x] Step 3 — `check.mjs` rewritten for both windows + a missing-pair negative case.
 - [x] Step 4 — real-engine repro passes on QuickJS (and JavaScriptCore).
-- [ ] Step 5 — chart: blocked on the `get_daily_stats` shape.
+- [x] Step 5 — chart: hourly buckets from `get_usage_records`, optional request, degraded paths tested.
 
 ---
 
-## 0. Verified host behaviour (CodexBar 0.73.0)
+## 0. Verified host behaviour (CodexBar 0.74.0)
 
 Read from the shipped app and upstream sources, not from guesses:
 
@@ -28,7 +29,7 @@ Read from the shipped app and upstream sources, not from guesses:
 | `extraWindows` | Mapped into the snapshot but **not rendered in the user-plugin card**. Do not rely on them for display. | same file |
 | Bar text | `UsageFormatter.usageLine(remaining:used:showUsed:)` → e.g. `75% left`; follows the global "show used" preference. | `Sources/CodexBarCore/UsageFormatter.swift:95-101` |
 | `resetDescription` | Not shown on the plugin card; feeds menu-bar/reset text. | `Sources/CodexBar/MenuBarDisplayText.swift:178-181` |
-| Details + chart | `ProviderDetailSectionsContent(sections:chartColor:)` renders detail rows **and** `chart` (bars/line, ≤120 points) under the bars. | `StatusItemController+UserPlugins.swift:243-246` |
+| Details + chart | `ProviderDetailSectionsContent(sections:chartColor:)` renders detail rows **and** `chart` (bars/line, ≤120 points) under the bars. Bars carry no axis labels — `label` reaches VoiceOver only. | `StatusItemController+UserPlugins.swift:243-246`, `ProviderDetailSectionsContent.swift:103-121,158-163` |
 | Menu bar / tray percent | `MenuBarMetricWindowResolver.rateWindow(...)`: `.automatic` → `primary ?? secondary ?? tertiary`; the user may pick Primary / Secondary / Tertiary / Average (`Average` needs **both** primary and secondary) / Extra usage. | `Sources/CodexBar/MenuBarMetricWindowResolver.swift:39-64, 90-105` |
 | Overview / merged icons | Same resolver per provider row; the plugin switcher segment uses the manifest icon (monogram + tint). | `Sources/CodexBar/StatusItemController+SwitcherViews.swift:72-76` |
 | Icon | `icon: {monogram, tint}` drives the switcher badge, the card accent and the chart colour. Omitted → first letter + neutral tint. | `StatusItemController+UserPlugins.swift:208-212, 307-314` |
@@ -44,35 +45,39 @@ change and no re-approval.
   每月上限 M 次 + 自然月重置".
 - **Limits come from the page, never hard-coded:** this account is 每期 1,800 次 / 每月 30,000 次, and
   other tiers differ.
-- **`请求次数余额 1,567 / 1800` is the current (5-hour) window**: remaining 1,567 of the per-period
-  limit 1,800 → used 233 → **12.9%**.
+- **The current (5-hour) window** is the bare `请求次数余额` stat (`<p class="stat-value">1,796</p>`);
+  its cap is `每期1,800次` in the VIP block, not a second number on the same line. The owner's
+  earlier paraphrase (`请求次数余额 1,567 / 1800`) is what the first parser wrongly required, and
+  building a fixture from that paraphrase is what caused the "missing period allowance" failure.
 - The monthly window is the page's `本周期剩余 R / 每月上限 M 次` pair.
 - `dashboard.php` stays the source for the windows; `user_api.php` supplies the usage records (§5).
-- `fixtures/dashboard.html` is stale (`请求次数余额 3`, `每期1,800次`; the real line is
-  `请求次数余额 1,567 / 1800`) and must be rewritten as part of the change.
+- The window labels shown in the card are Chinese, written into the plugin: the host does not
+  localize user-plugin detail strings, and `ctx.env` exposes only `timeZone` (no locale), so there is
+  no runtime language detection to hook into.
 
-## 2. Snapshot design
+## 2. Snapshot design (as shipped)
 
 ```js
 return {
   primary: {                        // 5-hour period — drives the tray/Overview icon by default
-    usedPercent: pct(periodLimit - periodRemaining, periodLimit),
+    usedPercent: pct(periodUsed, perPeriod),
     windowMinutes: 300,
     resetsAt: now + countdownMs,    // from "X小时Y分钟后重置"
-    resetDescription: `${periodRemaining} / ${periodLimit} left`,
+    resetDescription: `${periodRemaining} / ${perPeriod} 剩余 · ${label} 后重置`,
   },
   secondary: {                      // natural-month allowance — selectable as menu-bar metric
-    usedPercent: pct(monthLimit - monthRemaining, monthLimit),
+    usedPercent: pct(monthUsed, monthLimit),
     windowMinutes: 43200,           // 30 days, the value official monthly plugins use
-    resetDescription: "Resets on the 1st",   // no invented resetsAt; the page gives no monthly time
+    resetDescription: "随自然月重置",   // no invented resetsAt; the page gives no monthly time
   },
   details: [
-    { title: "Usage windows", rows: [ /* "5-hour period", "This month" with used/limit */ ] },
-    { title: "Recent usage", rows: [ /* day count + total */ ],
-      chart: { kind: "bars", title: "Requests per day", unit: "requests",
-               points: [ /* ≤120 {label, value} */ ] } },
+    { title: "用量窗口", rows: [ /* "5小时周期", "本月", "周期重置", "月度重置" */ ] },
+    { title: "账户", rows: [ /* balance, billed requests, tokens, plan, concurrency, expiry */ ] },
+    { title: "最近用量", rows: [ /* 统计范围 / 区间请求 / 峰值小时 */ ],
+      chart: { kind: "bars", title: "每小时请求数", unit: "次",
+               points: [ /* ≤120 hourly {label, value} */ ] } },
   ],
-  identity: { loginMethod: "Browser session" },
+  identity: { loginMethod: "浏览器会话" },
   dataConfidence: "exact",
 };
 ```
@@ -126,61 +131,58 @@ Verified unauthenticated: `HTTP 200`, `application/json`, body `{"success":false
 (so it needs the session cookie, and `get_balance` is rejected as `无效的请求` — actions are
 allowlisted server-side).
 
-Plan:
+### What the authenticated sample showed (captured 2026-10-11)
 
-1. Fetch the period/month page and the records page in one round trip with
-   `ctx.http.getWithOptional(...)`, the documented "required + optional enrichment" pair (Abacus and
-   Sakana use it). Records are **optional**: a failure keeps both windows and just drops the chart.
-2. Aggregate records into buckets (day first; fall back to hour if the window is short), cap at 120
-   points, and label them `YYYY-MM-DD`.
-3. Bound the work: `page_size` is the only knob; keep the response under the 1 MiB cap and the
-   whole fetch under the 20 s watchdog. If a record page is large, request one page and chart what
-   fits rather than paginating unbounded.
-4. If the sample shows a different envelope (e.g. `data.records` with `created_at` / `count` /
-   `model`), the parser targets those exact fields — no multi-shape guessing.
+Envelope `{success, data: {list, total, page, page_size}}`; records newest-first, each with
+`id, model, input_tokens, output_tokens, total_tokens, cache_tokens, response_time, first_byte_ms,
+amount, requests_deducted, request_count, model_ratio, time_ratio, context_tier_ratio, final_ratio,
+request_time`. `requests_deducted` is a decimal **string** and is the billed count that consumes the
+allowance; it matches `request_count` except for the rare unbilled row.
 
-## 6. Recent-usage chart — remaining unknown
+Measured limits: `page`/`page_size` are the only parameters (`date`, `start_date`, `end_date`,
+`days`, `granularity`, `group_by` are all ignored), `page_size` is honoured well past 1,500
+(`page_size=5000` answered 1.86 MB), and one record is ~373 bytes. The host caps a user plugin's
+response at **1 MiB**, so `page_size=1500` (560 KB, ~0.6 s, ~28 h of history) is the practical
+ceiling. **Daily buckets are impossible**: a week of records is several MiB. The chart is hourly,
+which also matches the 5-hour `primary` window.
 
-The observed `get_usage_records` page is a newest-first request log (`data.list[]` with
-`request_time`, `requests_deducted`, `total_tokens`, `model`, …), only 20 records per page against a
-`total` of ~59.5k, so it cannot cover days: two sample records sit 23 seconds apart. A second action
-was found by probing the endpoint (an unauthenticated call answers `未登录` for a valid action and
-`无效的请求` for an unknown one): **`get_daily_stats`** — which is the natural daily series for the
-chart, alongside `get_api_keys`.
+### Implemented
 
-Still needed: the authenticated body of
+1. One round trip: `ctx.http.getWithOptional(dashboard, records, {headers})`; the log arrives under
+   `.optional` and is `null` on failure, timeout, or oversize.
+2. `recentUsage` buckets by `request_time`'s hour on the vendor's clock (integer civil-date maths —
+   no `Date`, no `Intl`), sums `requests_deducted`, fills quiet hours with zero, drops the partial
+   oldest hour the page boundary created, and keeps the newest 120 points.
+3. Chart problems can never fail the fetch: `recentUsage` returns `null` instead of throwing, and the
+   call site catches anyway.
+4. `fixtures/records.json` is a real 210-record excerpt (including a real three-hour silence) so the
+   zero-fill and partial-hour rules stay tested.
 
-```
-https://api.0ki.cn/user_api.php?action=get_daily_stats
-```
+### Superseded
 
-It fixes the envelope, the bucket field (date), and the per-bucket value (requests vs tokens vs
-cost). Then the chart is a second, **optional** request on the same origin (paths are not part of the
-approval binding, so no re-approval):
+`get_daily_stats` is **not used**. It was the planned daily series, but the daily chart is impossible
+under the 1 MiB cap, and the owner asked for the chart to come from `get_usage_records`.
 
-1. Fetch `dashboard.php` and `get_daily_stats` in one round trip with `ctx.http.getWithOptional(...)`
-   — records are optional, so a failure keeps both windows and only drops the chart.
-2. Bucket by day, cap at 120 points, label `YYYY-MM-DD`, and keep the response under the 1 MiB cap.
-3. No multi-shape guessing: target the exact fields from the sample.
+## 7. Verification (as shipped)
 
-## 7. Verification
-
-1. `node check.mjs` — rewrite the fixture to the real shape, extend the stub with any new member
-   (`format`, `date.nowMillis`, `http.getWithOptional`), and assert: 12.9% primary, the monthly
-   percentage, the countdown → `resetsAt`, chart point count, and that a missing label still throws.
-   Keep the `acceptCookie` stub throwing.
-2. `tools/repro/repro.sh --expect-ok`, plus one run with `CODEXBAR_PLUGIN_ENGINE=jsc`, to prove the
-   snapshot passes the real mapper (the check stub cannot catch host-side contracts).
-3. Install, `diff shanhe.js ~/.config/codexbar/providers/shanhe.js`, refresh CodexBar, and confirm in
-   the app: two bars, the chart, `Menu bar metric` offering Secondary, and the monogram in the
+1. `node check.mjs` — the stub serves the required dashboard plus the optional records payload and
+   asserts: primary 0.22% and its `resetsAt` from the countdown, the monthly percentage, both
+   `windowMinutes`, the row labels, the chart's five points (`10-11 15:00 … 19:00` with three zero
+   bars), its range/total/peak rows, the 120-point cap, that a missing allowance block still throws,
+   and that a `null`, non-JSON, or reshaped records payload drops only the chart. The `acceptCookie`
+   stub still throws on purpose.
+2. `tools/repro/repro.sh --expect-ok` on QuickJS and with `CODEXBAR_PLUGIN_ENGINE=jsc`: both engines
+   fetch the two URLs with the same cookie and map the chart through the real snapshot validator.
+3. `shanhe.js` copied to `~/.config/codexbar/providers/shanhe.js` and verified with `diff`. The app
+   then shows two bars, the chart, `Menu bar metric` offering Secondary, and the monogram in the
    switcher/Overview.
-4. Update `AGENTS.md` (data flow, error ladder note about the second request) and `README.md`
-   (visible fields) in the same change.
+4. `AGENTS.md` (layout, data flow, chart rules) and `README.md` (visible fields) updated in the same
+   change.
 
-## 8. Ordering
+## 8. Ordering (as shipped)
 
-1. Capture the one JSON sample (§6) and rewrite `fixtures/dashboard.html` from the real page.
+1. Capture the real dashboard and a real `get_usage_records` page; keep both as fixtures.
 2. Parser: both windows + countdown.
 3. Snapshot: `primary` / `secondary` / details / `icon`.
-4. Chart: `getWithOptional` + bucketed points.
-5. Tests (§7.1) → real-engine repro (§7.2) → install + app check (§7.3) → docs (§7.4).
+4. Chart: `getWithOptional` + hourly buckets + the degraded paths.
+5. Tests (§7.1) → real-engine repro (§7.2) → install (§7.3) → docs (§7.4).

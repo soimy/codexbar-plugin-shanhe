@@ -3,6 +3,18 @@
 const PERIOD_WINDOW_MINUTES = 300;
 // 30 days, the monthly-window convention the bundled providers use.
 const MONTH_WINDOW_MINUTES = 43200;
+// The recent-usage chart reads the request log. One page of 1,500 records measured 560 KB (373 bytes
+// each) and about 28 hours of history on this account: under the host's 1 MiB response cap.
+//
+// `optionalBudgetSeconds` is load-bearing, not tuning. Both requests start together and the host
+// stops collecting the optional one once the budget has elapsed since the required request began —
+// 200 ms by default, which this page (~0.6 s) does not beat. Without the option the chart is dropped
+// on every real refresh, silently, while an instant stub stays green. The host accepts 0–5 seconds.
+const RECORDS_PAGE_SIZE = 1500;
+const RECORDS_BUDGET_SECONDS = 5;
+const RECORDS_URL = `https://api.0ki.cn/user_api.php?action=get_usage_records&page=1&page_size=${RECORDS_PAGE_SIZE}`;
+// One bar per hour; the host rejects a chart with more than 120 points.
+const CHART_MAX_HOURS = 120;
 
 function normalizeDashboard(html) {
   return String(html)
@@ -65,6 +77,118 @@ function dashboardCountdown(text) {
   return {
     totalMinutes: dayCount * 24 * 60 + hourCount * 60 + minuteCount,
     label: parts.length ? parts.join(" ") : "0m",
+  };
+}
+
+// Civil date <-> day-number conversions (Howard Hinnant's algorithm). The log stamps are already in
+// the vendor's local time, so the chart counts hours on the vendor's own clock: the engine has no
+// Intl, and ctx.env exposes the machine's zone rather than the server's, so local-time maths is the
+// only correct option here.
+function daysFromCivil(year, month, day) {
+  const shifted = month <= 2 ? year - 1 : year;
+  const era = Math.floor(shifted / 400);
+  const yearOfEra = shifted - era * 400;
+  const dayOfYear = Math.floor((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5) + day - 1;
+  const dayOfEra = yearOfEra * 365 + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100) + dayOfYear;
+  return era * 146097 + dayOfEra - 719468;
+}
+
+function civilFromDays(days) {
+  const shifted = days + 719468;
+  const era = Math.floor(shifted / 146097);
+  const dayOfEra = shifted - era * 146097;
+  const yearOfEra = Math.floor(
+    (dayOfEra - Math.floor(dayOfEra / 1460) + Math.floor(dayOfEra / 36524) - Math.floor(dayOfEra / 146096)) / 365,
+  );
+  const year = yearOfEra + era * 400;
+  const dayOfYear = dayOfEra - (365 * yearOfEra + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100));
+  const monthIndex = Math.floor((5 * dayOfYear + 2) / 153);
+  const day = dayOfYear - Math.floor((153 * monthIndex + 2) / 5) + 1;
+  const month = monthIndex < 10 ? monthIndex + 3 : monthIndex - 9;
+  return { year: month <= 2 ? year + 1 : year, month, day };
+}
+
+function pad2(value) {
+  return (value < 10 ? "0" : "") + value;
+}
+
+// "2026-10-11 22:54:56" -> { hour: hours since epoch on the vendor's clock, minute: 54 }.
+function logHour(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(value));
+  if (!match) return null;
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { hour: daysFromCivil(Number(match[1]), month, day) * 24 + Number(match[4]), minute: Number(match[5]) };
+}
+
+function hourLabel(hour) {
+  const day = Math.floor(hour / 24);
+  const civil = civilFromDays(day);
+  return `${pad2(civil.month)}-${pad2(civil.day)} ${pad2(hour - day * 24)}:00`;
+}
+
+// The request log is newest-first and complete, so an hour without records inside the fetched range
+// really had no requests: gaps become zero bars instead of being squeezed out of the chart.
+//
+// This is optional enrichment, so nothing here throws: a missing, non-JSON, or reshaped payload just
+// means no chart, and the two windows still render. A single unusable record is skipped, but the
+// envelope itself (`data.list`) has to be an array.
+function recentUsage(optional, host) {
+  if (!optional || typeof optional.bodyText !== "string") return null;
+  let payload = null;
+  try {
+    payload = JSON.parse(optional.bodyText);
+  } catch {
+    return null;
+  }
+  const list = payload && payload.data ? payload.data.list : null;
+  if (!Array.isArray(list) || !list.length) return null;
+
+  const totals = new Map();
+  let newest = null;
+  let oldest = null;
+  for (const record of list) {
+    if (!record || typeof record !== "object") continue;
+    const stamp = logHour(record.request_time);
+    const raw = record.requests_deducted;
+    if (!stamp || (typeof raw !== "string" && typeof raw !== "number")) continue;
+    const requests = Number(raw);
+    if (!Number.isFinite(requests) || requests < 0) continue;
+    totals.set(stamp.hour, (totals.get(stamp.hour) || 0) + requests);
+    if (newest === null || stamp.hour > newest) newest = stamp.hour;
+    // The list is newest-first, so the last usable record is the oldest one.
+    oldest = stamp;
+  }
+  if (newest === null || oldest === null) return null;
+
+  // The page cuts mid-hour, so the oldest bucket holds only part of its hour; drop it rather than
+  // draw a dip that never happened.
+  let start = oldest.hour;
+  if (oldest.minute !== 0) start += 1;
+  if (start > newest) return null;
+  // A quiet account can span more hours than a chart may hold; keep the newest ones.
+  if (newest - start + 1 > CHART_MAX_HOURS) start = newest - CHART_MAX_HOURS + 1;
+
+  const points = [];
+  for (let hour = start; hour <= newest; hour += 1) {
+    points.push({ label: hourLabel(hour), value: totals.get(hour) || 0 });
+  }
+  let sum = 0;
+  let peak = points[0];
+  for (const point of points) {
+    sum += point.value;
+    if (point.value > peak.value) peak = point;
+  }
+
+  return {
+    title: "最近用量",
+    rows: [
+      { label: "统计范围", value: `${points[0].label} → ${points[points.length - 1].label}` },
+      { label: "区间请求", value: `${host.format.number(sum)} 次` },
+      { label: "峰值小时", value: `${peak.label} · ${host.format.number(peak.value)} 次` },
+    ],
+    chart: { kind: "bars", title: "每小时请求数", unit: "次", points },
   };
 }
 
@@ -158,9 +282,16 @@ defineProvider({
         rejected = true;
         continue;
       }
-      const response = await ctx.http.get("https://api.0ki.cn/dashboard.php", {
-        headers: { Cookie: session.header },
-      });
+      // The dashboard is required; the request log is optional enrichment, so a failed, slow, or
+      // oversized records response drops the chart instead of the whole fetch. The budget has to be
+      // raised explicitly: the host otherwise stops collecting the optional response 200 ms after the
+      // required request started, which a 560 KB page does not reliably beat. Only the optional
+      // request's budget changes — the dashboard keeps the host's default timeout.
+      const response = await ctx.http.getWithOptional(
+        "https://api.0ki.cn/dashboard.php",
+        RECORDS_URL,
+        { headers: { Cookie: session.header }, optionalBudgetSeconds: RECORDS_BUDGET_SECONDS },
+      );
       if (response.status === 401 || response.status === 403 || response.status === 301 || response.status === 302) {
         ctx.browser.rejectCookie(domain, session);
         rejected = true;
@@ -169,8 +300,9 @@ defineProvider({
       if (response.status === 429) throw ctx.fail.rateLimited("Shanhe dashboard requests are rate limited.");
       if (response.status >= 500) throw ctx.fail.providerUnavailable(`Shanhe dashboard returned HTTP ${response.status}.`);
       if (response.status !== 200) throw ctx.fail.apiFailure(`Shanhe dashboard returned HTTP ${response.status}.`);
+      let snapshot;
       try {
-        return parseDashboard(response.bodyText, ctx);
+        snapshot = parseDashboard(response.bodyText, ctx);
       } catch (error) {
         if (/登录|login/i.test(response.bodyText) && !/账户余额/.test(response.bodyText)) {
           ctx.browser.rejectCookie(domain, session);
@@ -179,6 +311,15 @@ defineProvider({
         }
         throw ctx.fail.parseFailure(`Could not parse Shanhe dashboard: ${error.message}`);
       }
+      // A chart bug must never cost the user their windows.
+      let recent = null;
+      try {
+        recent = recentUsage(response.optional, ctx);
+      } catch {
+        recent = null;
+      }
+      if (recent) snapshot.details.push(recent);
+      return snapshot;
     }
     if (rejected) throw ctx.fail.authenticationExpired("Shanhe browser session expired. Sign in to api.0ki.cn again.");
     throw ctx.fail.missingCredential(

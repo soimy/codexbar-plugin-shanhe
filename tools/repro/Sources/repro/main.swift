@@ -31,6 +31,8 @@ private struct Options {
     var pluginPath = "shanhe.js"
     var mode: CookieMode = .session
     var bodyPath: String?
+    var recordsPath: String?
+    var recordsDelaySeconds = 0.0
     var status = 200
     var attempts = 3
     var expectOK = false
@@ -44,6 +46,8 @@ Usage: repro [plugin.js] [mode] [body.html] [flags]
   body.html   response body to serve (default: fixtures/dashboard.html, else a login page)
 
 Flags:
+  --records <path>   body served for the optional user_api.php request (default: fixtures/records.json)
+  --records-delay <s>  seconds the optional request takes (default: 0; the real page takes ~0.6)
   --status <code>    HTTP status the stub transport returns (default: 200)
   --attempts <n>     sequential fetches on one runtime, like the app's refreshes (default: 3)
   --expect-ok        exit 1 when any fetch fails
@@ -68,6 +72,16 @@ private func parse(_ arguments: [String]) -> Options {
         switch argument {
         case "--expect-ok":
             options.expectOK = true
+        case "--records":
+            index += 1
+            guard index < arguments.count else { fail("--records needs a path") }
+            options.recordsPath = arguments[index]
+        case "--records-delay":
+            index += 1
+            guard index < arguments.count, let delay = Double(arguments[index]), delay >= 0 else {
+                fail("--records-delay needs a non-negative number of seconds")
+            }
+            options.recordsDelaySeconds = delay
         case "--status":
             index += 1
             guard index < arguments.count, let status = Int(arguments[index]), (100..<600).contains(status) else {
@@ -101,21 +115,38 @@ private func parse(_ arguments: [String]) -> Options {
 
 // MARK: - Stubs
 
-/// Serves one canned response for every request and traces what the plugin asked for.
+/// Serves the canned dashboard for every request, and the canned request log for the optional
+/// `user_api.php` enrichment, while tracing what the plugin asked for.
+///
+/// `recordsDelaySeconds` reproduces the vendor's real latency (the 560 KB page takes ~0.6 s). That
+/// matters because the host only collects an optional response while the `optionalBudgetSeconds`
+/// budget lasts, so a plugin that forgets to raise the budget loses the chart on a real refresh but
+/// passes instantly against an instant stub.
 private struct StubTransport: ProviderHTTPTransport {
     let body: String
+    let records: String?
     let status: Int
+    let recordsDelaySeconds: Double
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         let url = request.url ?? URL(string: "https://invalid.example")!
         let cookie = request.value(forHTTPHeaderField: "Cookie") ?? "-"
         trace("HTTP \(request.httpMethod ?? "GET") \(url.absoluteString) cookie=\(cookie)")
+        let isRecords = url.absoluteString.contains("user_api.php")
+        if isRecords, self.recordsDelaySeconds > 0 {
+            try await Task.sleep(for: .seconds(self.recordsDelaySeconds))
+        }
+        let payload = (isRecords ? self.records : nil) ?? self.body
         let response = HTTPURLResponse(
             url: url,
             statusCode: self.status,
             httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "text/html; charset=utf-8"])!
-        return (Data(self.body.utf8), response)
+            headerFields: [
+                "Content-Type": isRecords && self.records != nil
+                    ? "application/json; charset=utf-8"
+                    : "text/html; charset=utf-8",
+            ])!
+        return (Data(payload.utf8), response)
     }
 }
 
@@ -141,17 +172,24 @@ private struct PluginRepro {
 
     private static func run(_ options: Options) async throws {
         let body = try self.responseBody(for: options)
+        let records = try self.recordsBody(for: options)
         let engine = ProcessInfo.processInfo.environment["CODEXBAR_PLUGIN_ENGINE"]?.lowercased() ?? "default (QuickJS)"
         print("engine: \(engine)")
         print("mode:   \(options.mode.rawValue) — \(options.mode.summary)")
         print("status: \(options.status)")
+        print("records: \(options.recordsPath ?? (records == nil ? "none (chart dropped)" : "fixtures/records.json"))")
+        if options.recordsDelaySeconds > 0 { print("records delay: \(options.recordsDelaySeconds)s") }
 
         let stateDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("codexbar-plugin-repro", isDirectory: true)
         let loader = UserProviderPluginLoader(
             providersDirectory: stateDirectory.appendingPathComponent("providers", isDirectory: true),
             cacheDirectory: stateDirectory.appendingPathComponent("cache", isDirectory: true),
-            transport: StubTransport(body: body, status: options.status))
+            transport: StubTransport(
+                body: body,
+                records: records,
+                status: options.status,
+                recordsDelaySeconds: options.recordsDelaySeconds))
         let plugin = try loader.load(fileURL: URL(fileURLWithPath: options.pluginPath))
         print("loaded: \(plugin.manifest.id.rawValue) — \(plugin.manifest.name)")
         print("  capabilities:  \(plugin.manifest.capabilities.map(\.rawValue).joined(separator: ", "))")
@@ -208,6 +246,18 @@ private struct PluginRepro {
         return loginPage
     }
 
+    private static func recordsBody(for options: Options) throws -> String? {
+        if let recordsPath = options.recordsPath {
+            return try String(contentsOfFile: recordsPath, encoding: .utf8)
+        }
+        let fixture = "fixtures/records.json"
+        guard FileManager.default.fileExists(atPath: fixture) else {
+            trace("no \(fixture) in \(FileManager.default.currentDirectoryPath); the optional request returns nothing")
+            return nil
+        }
+        return try? String(contentsOfFile: fixture, encoding: .utf8)
+    }
+
     private static func printSnapshot(_ snapshot: UsageSnapshot) {
         print("  primary.usedPercent: \(snapshot.primary.map { String($0.usedPercent) } ?? "none")")
         if let reset = snapshot.primary?.resetDescription { print("  primary.resetDescription: \(reset)") }
@@ -217,6 +267,9 @@ private struct PluginRepro {
             print("  [\(section.title ?? "untitled")]")
             for row in section.rows {
                 print("    \(row.label): \(row.value)")
+            }
+            if let chart = section.chart {
+                print("    chart: \(chart.kind.rawValue) \(chart.title ?? "-") \(chart.points.count) points, first \(chart.points.first?.label ?? "-"), last \(chart.points.last?.label ?? "-")")
             }
         }
     }
