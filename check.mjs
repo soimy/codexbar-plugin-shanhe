@@ -34,13 +34,13 @@ if (result.primary.windowMinutes !== 300) throw new Error(`primary windowMinutes
 if (result.primary.resetsAt?.getTime() !== NOW_MILLIS + (3 * 60 + 48) * 60 * 1000) throw new Error("primary resetsAt");
 if (!close(result.secondary.usedPercent, (30000 - 23941) / 30000 * 100)) throw new Error(`secondary usedPercent ${result.secondary.usedPercent}`);
 if (result.secondary.windowMinutes !== 43200) throw new Error(`secondary windowMinutes ${result.secondary.windowMinutes}`);
-if (result.details[0].title !== "Usage windows" || result.details[1].title !== "Account") throw new Error("detail sections");
-if (row(0, "5-hour period")?.value !== "4 / 1,800 used") throw new Error("period row");
-if (row(0, "This month")?.value !== "6,059 / 30,000 used") throw new Error("monthly row");
-if (row(0, "Period resets")?.value !== "3h 48m left") throw new Error("reset row");
-if (row(1, "Account balance")?.value !== "¥0.00") throw new Error("balance row");
-if (row(1, "Plan")?.value !== "GLM系列年卡 ——星光编程套餐") throw new Error("plan row");
-if (row(1, "Concurrency")?.value !== "0 / 3") throw new Error("concurrency row");
+if (result.details[0].title !== "用量窗口" || result.details[1].title !== "账户") throw new Error("detail sections");
+if (row(0, "5小时周期")?.value !== "4 / 1,800") throw new Error("period row");
+if (row(0, "本月")?.value !== "6,059 / 30,000") throw new Error("monthly row");
+if (row(0, "周期重置")?.value !== "3h 48m 后") throw new Error("reset row");
+if (row(1, "账户余额")?.value !== "¥0.00") throw new Error("balance row");
+if (row(1, "套餐")?.value !== "GLM系列年卡 ——星光编程套餐") throw new Error("plan row");
+if (row(1, "并发数")?.value !== "0 / 3") throw new Error("concurrency row");
 
 // A missing allowance block must fail the fetch instead of degrading into a silent zero.
 await provider.fetchUsage(context(fixture.replace("每期1,800次", ""))).then(

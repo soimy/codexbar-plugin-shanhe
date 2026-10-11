@@ -92,31 +92,34 @@ function parseDashboard(html, host) {
   const primary = {
     usedPercent: host.pct(periodUsed, allowances.perPeriod),
     windowMinutes: PERIOD_WINDOW_MINUTES,
-    resetDescription: `${format(periodRemaining)} / ${format(allowances.perPeriod)} left`,
+    resetDescription: `${format(periodRemaining)} / ${format(allowances.perPeriod)} 剩余`,
   };
   if (countdown) {
     primary.resetsAt = host.date.unixMillis(host.date.nowMillis() + countdown.totalMinutes * 60000);
-    primary.resetDescription += ` · resets in ${countdown.label}`;
+    primary.resetDescription += ` · ${countdown.label} 后重置`;
   }
 
+  // Display labels are written in Chinese directly. The host's Localizable.strings lookup does not
+  // apply to user-plugin detail labels (verified against the app: "Window"/"Balance" stay English),
+  // so reusing catalog keys buys nothing; the dashboard is a Chinese product anyway.
   const windowRows = [
-    { label: "5-hour period", value: `${format(periodUsed)} / ${format(allowances.perPeriod)} used` },
-    { label: "This month", value: `${format(monthUsed)} / ${format(allowances.monthLimit)} used` },
+    { label: "5小时周期", value: `${format(periodUsed)} / ${format(allowances.perPeriod)}` },
+    { label: "本月", value: `${format(monthUsed)} / ${format(allowances.monthLimit)}` },
   ];
-  if (countdown) windowRows.push({ label: "Period resets", value: `${countdown.label} left` });
+  if (countdown) windowRows.push({ label: "周期重置", value: `${countdown.label} 后` });
   // The dashboard prints no monthly reset time; the plan follows the calendar month.
-  windowRows.push({ label: "Monthly reset", value: "Calendar month" });
+  windowRows.push({ label: "月度重置", value: "自然月" });
 
   const accountRows = [
-    { label: "Account balance", value: `¥${balance.toFixed(2)}` },
-    { label: "Total billed requests", value: format(totalBilled) },
-    { label: "Billed requests this month", value: format(monthlyBilled) },
-    { label: "Total tokens", value: format(totalTokens) },
-    { label: "Tokens this month", value: format(monthlyTokens) },
+    { label: "账户余额", value: `¥${balance.toFixed(2)}` },
+    { label: "累计计费", value: format(totalBilled) },
+    { label: "本月计费", value: format(monthlyBilled) },
+    { label: "累计 Token", value: format(totalTokens) },
+    { label: "本月 Token", value: format(monthlyTokens) },
   ];
-  if (plan) accountRows.push({ label: "Plan", value: plan[1].trim() });
-  if (concurrency) accountRows.push({ label: "Concurrency", value: `${concurrency[1]} / ${concurrency[2]}` });
-  if (expiry) accountRows.push({ label: "Plan expiry", value: expiry[1] });
+  if (plan) accountRows.push({ label: "套餐", value: plan[1].trim() });
+  if (concurrency) accountRows.push({ label: "并发数", value: `${concurrency[1]} / ${concurrency[2]}` });
+  if (expiry) accountRows.push({ label: "有效期至", value: expiry[1] });
 
   return {
     primary,
@@ -124,13 +127,13 @@ function parseDashboard(html, host) {
     secondary: {
       usedPercent: host.pct(monthUsed, allowances.monthLimit),
       windowMinutes: MONTH_WINDOW_MINUTES,
-      resetDescription: "Resets with the calendar month",
+      resetDescription: "随自然月重置",
     },
     details: [
-      { title: "Usage windows", rows: windowRows },
-      { title: "Account", rows: accountRows },
+      { title: "用量窗口", rows: windowRows },
+      { title: "账户", rows: accountRows },
     ],
-    identity: { loginMethod: "Browser session" },
+    identity: { loginMethod: "浏览器会话" },
     dataConfidence: "exact",
   };
 }
