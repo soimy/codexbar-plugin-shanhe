@@ -1,0 +1,5 @@
+# SwiftPM build output for tools/repro
+.build/
+
+# Resolution follows the user-supplied CODEXBAR_SOURCE checkout, so the lockfile is per-checkout.
+tools/repro/Package.resolved

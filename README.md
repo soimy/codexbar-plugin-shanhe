@@ -15,3 +15,9 @@ The provider reads account balance, request balance, billed requests, token tota
 ```sh
 node check.mjs
 ```
+
+`check.mjs` stubs CodexBar's host, so it cannot catch host-side contracts. To run the plugin through the real runtime (QuickJS/JavaScriptCore), use the optional harness in `tools/repro/` with a CodexBar checkout:
+
+```sh
+CODEXBAR_SOURCE=/path/to/CodexBar tools/repro/repro.sh
+```

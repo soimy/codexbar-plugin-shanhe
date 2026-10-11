@@ -1,12 +1,13 @@
 # Repository Guidelines
 
-Third-party CodexBar user plugin for Shanhe (`api.0ki.cn`). One JavaScript file, no build step, no dependencies, no CI.
+Third-party CodexBar user plugin for Shanhe (`api.0ki.cn`). The plugin is one JavaScript file with no build step, no dependencies, no CI; the only extra tooling is the optional real-engine harness in `tools/repro/`.
 
 ## Layout
 
 - `shanhe.js` — the entire plugin: `normalizeDashboard` / `dashboardNumber` / `parseDashboard` helpers plus exactly one `defineProvider({...})` call. No imports, no modules, no shared state outside the fetch.
 - `check.mjs` — the only check. Loads `shanhe.js` into `node:vm` with a stub `ctx`, serves `fixtures/dashboard.html` as the dashboard response, and asserts the mapped snapshot.
 - `fixtures/dashboard.html` — hand-trimmed capture of the real server-rendered dashboard; it is the parser's contract.
+- `tools/repro/` — optional SwiftPM harness that runs the plugin through CodexBar's real runtime (`UserProviderPluginLoader` → `ProviderPluginRuntime` → QuickJS/JavaScriptCore) with a stub transport. Needs a CodexBar checkout; see its `README.md`. Not part of the check.
 - `docs/superpowers/plans/` — implementation plans for larger changes.
 - `README.md` — install/check entry point. Keep it short; details belong in this file or the code.
 
@@ -27,7 +28,7 @@ The dashboard HTML is the source of truth: the public API documents Bearer auth 
 5. Parse failure on a login page → `rejectCookie`, continue; any other parse failure → `ctx.fail.parseFailure`.
 6. Exhausted candidates: `authenticationExpired` if anything was rejected, otherwise `missingCredential` telling the user which browser to sign in with.
 
-`check.mjs` stubs `ctx.fail.*` as plain `Error`s; keep every `ctx.fail` name it lists valid, and add a stub when a new one appears.
+`check.mjs` stubs `ctx.fail.*` as plain `Error`s; keep every `ctx.fail` name it lists valid, and add a stub when a new one appears. Host-side stubs mirror the real host contract: the `acceptCookie` stub throws on purpose, because the host only allows that call for bundled plugins that declare `cookiePolicy.cache: "validatedSingleEntry"`. Do not soften it back to a no-op, and do not call `acceptCookie` from the plugin — user plugins have no persistent cookie cache.
 
 ## Runtime constraints
 
@@ -46,6 +47,12 @@ node check.mjs
 ```
 
 Run it after every edit to `shanhe.js` or the fixture, and expect `shanhe plugin syntax and dashboard parser checks passed`. It is the whole test suite: no test framework, no `package.json`, no npm install. Do not add dependencies or tooling unless the change genuinely needs them.
+
+`check.mjs` fakes the host, so it cannot catch a host-side contract the way the app does. When a change depends on runtime behaviour (engine APIs, cookie sessions, snapshot limits) or the app disagrees with the check, reproduce it with the real engine instead:
+
+```sh
+CODEXBAR_SOURCE=/path/to/CodexBar tools/repro/repro.sh --expect-ok
+```
 
 ## Install
 
