@@ -23,20 +23,31 @@ function dashboardNumber(text, pattern, label) {
   return value;
 }
 
-// The dashboard pairs every allowance with its remaining count, e.g. "请求次数余额 1,567 / 1,800"
-// and "本周期剩余 25,587 / 30,000 次". Both numbers come from the page; neither limit is pinned.
-function dashboardAllowance(text, pattern, label) {
-  const match = pattern.exec(text);
-  if (!match) throw new Error(`missing ${label}`);
-  const remaining = Number(match[1].replace(/,/g, ""));
-  const limit = Number(match[2].replace(/,/g, ""));
-  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0 || remaining < 0 || remaining > limit) {
-    throw new Error(`invalid ${label}`);
+// The VIP block prints the limits and the monthly remaining together, in that order:
+// "每期1,800次 … 每月30,000次 … 本周期剩余 23,941 / 30,000 次". They are read as one anchored block
+// because the page lists other tiers elsewhere, and the block is what keeps them from mixing.
+function dashboardAllowances(text) {
+  const block = /每期\s*([\d,]+)\s*次[\s\S]{0,300}?每月\s*([\d,]+)\s*次[\s\S]{0,300}?本周期剩余\s*([\d,]+)\s*\/\s*([\d,]+)\s*次/.exec(
+    text,
+  );
+  if (!block) {
+    if (!/每期\s*[\d,]+\s*次/.test(text)) throw new Error("missing per-period allowance");
+    if (!/本周期剩余\s*[\d,]+\s*\/\s*[\d,]+\s*次/.test(text)) throw new Error("missing monthly allowance");
+    throw new Error("allowance block is not contiguous");
   }
-  return { remaining, limit };
+  const perPeriod = Number(block[1].replace(/,/g, ""));
+  const monthly = Number(block[2].replace(/,/g, ""));
+  const monthRemaining = Number(block[3].replace(/,/g, ""));
+  const monthLimit = Number(block[4].replace(/,/g, ""));
+  if (!Number.isFinite(perPeriod) || perPeriod <= 0) throw new Error("invalid per-period allowance");
+  if (!Number.isFinite(monthly) || monthly <= 0 || monthly !== monthLimit) throw new Error("invalid monthly allowance");
+  if (!Number.isFinite(monthRemaining) || monthRemaining < 0 || monthRemaining > monthLimit) {
+    throw new Error("invalid monthly remaining");
+  }
+  return { perPeriod, monthLimit, monthRemaining };
 }
 
-// "0小时14分钟后重置" / "1天2小时后重置" -> { totalMinutes, label: "14m" | "1d 2h" }.
+// "3小时48分钟后重置" / "1天2小时后重置" -> { totalMinutes, label: "3h 48m" | "1d 2h" }.
 function dashboardCountdown(text) {
   const match = /((?:\d+\s*天)?\s*(?:\d+\s*小时)?\s*(?:\d+\s*分钟)?)\s*后重置/.exec(text);
   if (!match) return null;
@@ -61,24 +72,27 @@ function parseDashboard(html, host) {
   const text = normalizeDashboard(html);
   if (!/账户余额/.test(text)) throw new Error("dashboard content is missing");
   const format = (value) => host.format.number(value);
+  const allowances = dashboardAllowances(text);
   const balance = dashboardNumber(text, /账户余额\s*¥?\s*([\d,]+(?:\.\d+)?)/, "balance");
+  // The period balance is a bare number; its cap comes from the VIP block. A purchase on top of the
+  // plan can leave the balance above the cap, so the used count is clamped instead of rejected.
+  const periodRemaining = dashboardNumber(text, /请求次数余额\s*([\d,]+)/, "period balance");
   const totalBilled = dashboardNumber(text, /累计计费次数\s*([\d,]+)/, "total billed requests");
   const monthlyBilled = dashboardNumber(text, /本月计费次数\s*([\d,]+)/, "monthly billed requests");
   const totalTokens = dashboardNumber(text, /Token\s*已用总数\s*([\d,]+)/i, "total tokens");
-  const monthlyTokens = dashboardNumber(text, /Token\s*已用总数\s*[\d,]+\s*本月:\s*([\d,]+)/i, "monthly tokens");
-  const period = dashboardAllowance(text, /请求次数余额\s*([\d,]+)\s*\/\s*([\d,]+)/, "period allowance");
-  const month = dashboardAllowance(text, /本周期剩余\s*([\d,]+)\s*\/\s*([\d,]+)\s*次/, "monthly allowance");
+  const monthlyTokens = dashboardNumber(text, /Token\s*已用总数\s*[\d,]+\s*本月[:：]\s*([\d,]+)/i, "monthly tokens");
   const countdown = dashboardCountdown(text);
   const concurrency = text.match(/并发数\s*([\d,]+)\s*\/\s*([\d,]+)/);
   const expiry = text.match(/有效期至[:：]\s*([\d.-]+)/);
-  const periodUsed = period.limit - period.remaining;
-  const monthUsed = month.limit - month.remaining;
+  const plan = text.match(/VIP会员\s*([\s\S]{1,60}?)\s*\d+\s*(?:天|小时|分钟)/);
+  const periodUsed = Math.max(0, allowances.perPeriod - periodRemaining);
+  const monthUsed = allowances.monthLimit - allowances.monthRemaining;
 
   // `primary` is the 5-hour period: it drives the menu bar / Overview percent by default.
   const primary = {
-    usedPercent: host.pct(periodUsed, period.limit),
+    usedPercent: host.pct(periodUsed, allowances.perPeriod),
     windowMinutes: PERIOD_WINDOW_MINUTES,
-    resetDescription: `${format(period.remaining)} / ${format(period.limit)} left`,
+    resetDescription: `${format(periodRemaining)} / ${format(allowances.perPeriod)} left`,
   };
   if (countdown) {
     primary.resetsAt = host.date.unixMillis(host.date.nowMillis() + countdown.totalMinutes * 60000);
@@ -86,8 +100,8 @@ function parseDashboard(html, host) {
   }
 
   const windowRows = [
-    { label: "5-hour period", value: `${format(periodUsed)} / ${format(period.limit)} used` },
-    { label: "This month", value: `${format(monthUsed)} / ${format(month.limit)} used` },
+    { label: "5-hour period", value: `${format(periodUsed)} / ${format(allowances.perPeriod)} used` },
+    { label: "This month", value: `${format(monthUsed)} / ${format(allowances.monthLimit)} used` },
   ];
   if (countdown) windowRows.push({ label: "Period resets", value: `${countdown.label} left` });
   // The dashboard prints no monthly reset time; the plan follows the calendar month.
@@ -100,6 +114,7 @@ function parseDashboard(html, host) {
     { label: "Total tokens", value: format(totalTokens) },
     { label: "Tokens this month", value: format(monthlyTokens) },
   ];
+  if (plan) accountRows.push({ label: "Plan", value: plan[1].trim() });
   if (concurrency) accountRows.push({ label: "Concurrency", value: `${concurrency[1]} / ${concurrency[2]}` });
   if (expiry) accountRows.push({ label: "Plan expiry", value: expiry[1] });
 
@@ -107,7 +122,7 @@ function parseDashboard(html, host) {
     primary,
     // `secondary` is the monthly allowance; it is user-selectable as the menu bar metric.
     secondary: {
-      usedPercent: host.pct(monthUsed, month.limit),
+      usedPercent: host.pct(monthUsed, allowances.monthLimit),
       windowMinutes: MONTH_WINDOW_MINUTES,
       resetDescription: "Resets with the calendar month",
     },

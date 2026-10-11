@@ -29,22 +29,24 @@ const context = (bodyText) => ({
 const result = await provider.fetchUsage(context(fixture));
 const close = (actual, expected) => Math.abs(actual - expected) < 1e-9;
 const row = (section, label) => result.details[section].rows.find((item) => item.label === label);
-if (!close(result.primary.usedPercent, (1800 - 1567) / 1800 * 100)) throw new Error(`primary usedPercent ${result.primary.usedPercent}`);
+if (!close(result.primary.usedPercent, (1800 - 1796) / 1800 * 100)) throw new Error(`primary usedPercent ${result.primary.usedPercent}`);
 if (result.primary.windowMinutes !== 300) throw new Error(`primary windowMinutes ${result.primary.windowMinutes}`);
-if (result.primary.resetsAt?.getTime() !== NOW_MILLIS + 14 * 60 * 1000) throw new Error("primary resetsAt");
-if (!close(result.secondary.usedPercent, (30000 - 25587) / 30000 * 100)) throw new Error(`secondary usedPercent ${result.secondary.usedPercent}`);
+if (result.primary.resetsAt?.getTime() !== NOW_MILLIS + (3 * 60 + 48) * 60 * 1000) throw new Error("primary resetsAt");
+if (!close(result.secondary.usedPercent, (30000 - 23941) / 30000 * 100)) throw new Error(`secondary usedPercent ${result.secondary.usedPercent}`);
 if (result.secondary.windowMinutes !== 43200) throw new Error(`secondary windowMinutes ${result.secondary.windowMinutes}`);
 if (result.details[0].title !== "Usage windows" || result.details[1].title !== "Account") throw new Error("detail sections");
-if (row(0, "5-hour period")?.value !== "233 / 1,800 used") throw new Error("period row");
-if (row(0, "This month")?.value !== "4,413 / 30,000 used") throw new Error("monthly row");
-if (row(0, "Period resets")?.value !== "14m left") throw new Error("reset row");
+if (row(0, "5-hour period")?.value !== "4 / 1,800 used") throw new Error("period row");
+if (row(0, "This month")?.value !== "6,059 / 30,000 used") throw new Error("monthly row");
+if (row(0, "Period resets")?.value !== "3h 48m left") throw new Error("reset row");
 if (row(1, "Account balance")?.value !== "¥0.00") throw new Error("balance row");
+if (row(1, "Plan")?.value !== "GLM系列年卡 ——星光编程套餐") throw new Error("plan row");
+if (row(1, "Concurrency")?.value !== "0 / 3") throw new Error("concurrency row");
 
-// A missing allowance pair must fail the fetch instead of degrading into a silent zero.
-await provider.fetchUsage(context(fixture.replace("1,567 / 1,800", "3"))).then(
-  () => { throw new Error("missing period allowance was accepted"); },
+// A missing allowance block must fail the fetch instead of degrading into a silent zero.
+await provider.fetchUsage(context(fixture.replace("每期1,800次", ""))).then(
+  () => { throw new Error("missing per-period allowance was accepted"); },
   (error) => {
-    if (!/missing period allowance/.test(error.message)) throw new Error(`unexpected error: ${error.message}`);
+    if (!/missing per-period allowance/.test(error.message)) throw new Error(`unexpected error: ${error.message}`);
   },
 );
 console.log("shanhe plugin syntax and dashboard parser checks passed");

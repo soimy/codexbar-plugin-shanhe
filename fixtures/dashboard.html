@@ -1,9 +1,118 @@
-<main>
-  <h3>账户余额</h3><p>¥0.00</p>
-  <h3>请求次数余额</h3><p>1,567 / 1,800</p>
-  <h3>累计计费次数</h3><p>56,976</p>
-  <h3>本月计费次数</h3><p>11,395</p>
-  <h3>Token 已用总数</h3><p>19,883,155,324 本月: 960,364,405</p>
-  <h3>并发数</h3><p>0/3</p>
-  <section>VIP会员 0小时14分钟后重置 有效期至：2027.05.07 每期1,800次 每月30,000次 本周期剩余 <strong>25,587</strong> / 30,000 次</section>
-</main>
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon" style="background: linear-gradient(135deg, #2196F3 0%, #00BCD4 100%);">
+            <i class="ri-wallet-line"></i>
+        </div>
+        <div class="stat-content">
+            <h3>账户余额</h3>
+            <p class="stat-value">¥0.00</p>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon" style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);">
+            <i class="ri-coins-line"></i>
+        </div>
+        <div class="stat-content">
+            <h3>请求次数余额</h3>
+            <p class="stat-value">1,796</p>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+            <i class="ri-line-chart-line"></i>
+        </div>
+        <div class="stat-content">
+            <h3>累计计费次数</h3>
+            <p class="stat-value">58,622</p>
+            <small style="color: var(--text-muted); font-size: 11px;">依据当前计费规则统计</small>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon" style="background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%);">
+            <i class="ri-database-line"></i>
+        </div>
+        <div class="stat-content">
+            <h3>本月计费次数</h3>
+            <p class="stat-value">13,041</p>
+            <small style="color: var(--text-muted); font-size: 11px;">
+                依据当前计费规则统计
+            </small>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon" style="background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);">
+            <i class="ri-cpu-line"></i>
+        </div>
+        <div class="stat-content">
+            <h3>Token 已用总数</h3>
+            <p class="stat-value">20,330,742,078</p>
+            <small style="color: var(--text-muted); font-size: 11px;">
+                本月: 1,164,365,328                        </small>
+        </div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-icon" style="background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);">
+            <i class="ri-flow-chart"></i>
+        </div>
+        <div class="stat-content">
+            <h3>并发数</h3>
+            <p class="stat-value" id="concurrencyDisplay" style="color: rgb(16, 185, 129);">0/3</p>
+            <small style="color: var(--text-muted); font-size: 12px;" id="concurrencyUpdateStatus">更新于 20:35:10</small>
+            <div id="activeRequestList" class="active-request-list"><div class="active-request-empty">暂无正在运行的基础对话</div></div>
+        </div>
+    </div>
+</div>
+
+
+<div class="vip-info">
+    <div class="vip-badge">
+        <i class="ri-gem-line"></i> VIP会员
+    </div>
+    <div class="vip-title">
+        GLM系列年卡 ——星光编程套餐                        </div>
+    <div class="vip-meta">
+        <div class="vip-meta-item">
+            <i class="ri-time-line"></i>
+            <span>3小时48分钟后重置</span>
+        </div>
+        <div class="vip-meta-item">
+            <i class="ri-calendar-line"></i>
+            <span>有效期至：2027.05.07</span>
+        </div>
+        <div class="vip-meta-item">
+            <i class="ri-coins-line"></i>
+            <span>每期1,800次</span>
+        </div>
+        <div class="vip-meta-item">
+            <i class="ri-refresh-line"></i>
+            <span>每月30,000次</span>
+        </div>
+        <div class="vip-meta-item">
+            <i class="ri-funds-line"></i>
+            <span>本周期剩余 <strong style="color:#fbbf24;font-size:15px;">23,941</strong><span style="opacity:.7"> / 30,000 次</span></span>
+        </div>
+        <div class="vip-meta-item">
+            <i class="ri-tools-line"></i>
+            <span>MCP调用 100次/周期</span>
+        </div>
+    </div>
+    <div class="vip-restrictions" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2);">
+        <div style="margin-bottom: 8px; font-size: 13px;">
+            <strong style="color: rgba(255,255,255,0.9);"><i class="ri-box-line"></i> 可用模型：</strong>
+            <div style="margin-top: 4px;">
+                <span style="color: rgba(255,255,255,0.85);">可用模型：GLM 系列、Claude 系列全部模型</span>
+            </div>
+        </div>
+        <div style="font-size: 13px;">
+            <strong style="color: rgba(255,255,255,0.9);"><i class="ri-broadcast-line"></i> 可用渠道：</strong>
+            <div style="margin-top: 4px;">
+                <span style="color: rgba(255,255,255,0.85);">支持GLM相关模型</span>
+            </div>
+        </div>
+    </div>
+</div>
