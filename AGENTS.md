@@ -67,6 +67,8 @@ CODEXBAR_SOURCE=/path/to/CodexBar tools/repro/repro.sh --expect-ok
 
 Copy `shanhe.js` to `~/.config/codexbar/providers/shanhe.js` and refresh CodexBar (or use **Settings → Plugins → Install…**). This machine's installed copy is expected to match the repo file byte for byte — check with `diff` after editing, and sign in to `https://api.0ki.cn/dashboard.php` in Chrome when the plugin reports an expired session.
 
+**After every functional change to `shanhe.js`, copy it to `~/.config/codexbar/providers/shanhe.js` before finishing** (outside the sandbox workspace, so this may need an elevated file operation), then confirm with `diff`.
+
 ## Commits
 
 Short lowercase conventional subjects scoped to the change: `feat:`, `fix:`, `docs:`. Keep commits scoped to one concern and update `README.md` only when install or visible fields change.
