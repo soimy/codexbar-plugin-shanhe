@@ -96,7 +96,6 @@ defineProvider({
       if (response.status !== 200) throw ctx.fail.apiFailure(`Shanhe dashboard returned HTTP ${response.status}.`);
       try {
         const snapshot = parseDashboard(response.bodyText, ctx.pct);
-        ctx.browser.acceptCookie(domain, session);
         return snapshot;
       } catch (error) {
         if (/登录|login/i.test(response.bodyText) && !/账户余额/.test(response.bodyText)) {

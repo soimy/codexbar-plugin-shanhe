@@ -9,7 +9,10 @@ const result = await provider.fetchUsage({
   browser: {
     availability: () => "manual",
     sessions: async function* () { yield { id: "fixture", header: "session=fixture" }; },
-    acceptCookie: () => {},
+    // User plugins cannot call acceptCookie: the host requires a bundled cookiePolicy with cache
+    // "validatedSingleEntry". Throwing here keeps that contract honest, so re-adding the call fails
+    // this check instead of only failing inside the app.
+    acceptCookie: () => { throw new Error("cookie persistence is unavailable"); },
     rejectCookie: () => {},
     supportedBrowsers: "Chrome",
   },
