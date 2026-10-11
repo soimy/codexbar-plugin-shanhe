@@ -8,7 +8,7 @@ The dashboard is the source of truth because the public API documentation does n
 
 Copy `shanhe.js` into CodexBar's user provider plugin directory. Sign in to `https://api.0ki.cn/dashboard.php` in a supported browser, then refresh CodexBar.
 
-The provider reads account balance, request balance, billed requests, token totals, concurrency, plan allowance, cycle remaining, reset countdown, and expiry from the dashboard HTML.
+The provider shows two usage windows as progress bars: the 5-hour period (per-period limit, reset countdown) and the calendar month. Because both windows are declared, CodexBar's **Menu bar metric** offers Primary, Secondary, and Average, and the menu bar / Overview icon follows the selected window. It also lists account balance, billed requests, token totals, concurrency, and plan expiry from the dashboard HTML.
 
 ## Check
 

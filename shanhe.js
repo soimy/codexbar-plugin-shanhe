@@ -1,3 +1,9 @@
+// Shanhe sells 5-hour periods ("每 5 小时 N 次") on top of a monthly cap; the dashboard prints the
+// per-period and monthly limits, so only the period length is pinned here.
+const PERIOD_WINDOW_MINUTES = 300;
+// 30 days, the monthly-window convention the bundled providers use.
+const MONTH_WINDOW_MINUTES = 43200;
+
 function normalizeDashboard(html) {
   return String(html)
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
@@ -17,48 +23,98 @@ function dashboardNumber(text, pattern, label) {
   return value;
 }
 
-function parseDashboard(html, pct) {
+// The dashboard pairs every allowance with its remaining count, e.g. "请求次数余额 1,567 / 1,800"
+// and "本周期剩余 25,587 / 30,000 次". Both numbers come from the page; neither limit is pinned.
+function dashboardAllowance(text, pattern, label) {
+  const match = pattern.exec(text);
+  if (!match) throw new Error(`missing ${label}`);
+  const remaining = Number(match[1].replace(/,/g, ""));
+  const limit = Number(match[2].replace(/,/g, ""));
+  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0 || remaining < 0 || remaining > limit) {
+    throw new Error(`invalid ${label}`);
+  }
+  return { remaining, limit };
+}
+
+// "0小时14分钟后重置" / "1天2小时后重置" -> { totalMinutes, label: "14m" | "1d 2h" }.
+function dashboardCountdown(text) {
+  const match = /((?:\d+\s*天)?\s*(?:\d+\s*小时)?\s*(?:\d+\s*分钟)?)\s*后重置/.exec(text);
+  if (!match) return null;
+  const days = /(\d+)\s*天/.exec(match[1]);
+  const hours = /(\d+)\s*小时/.exec(match[1]);
+  const minutes = /(\d+)\s*分钟/.exec(match[1]);
+  if (!days && !hours && !minutes) return null;
+  const dayCount = days ? Number(days[1]) : 0;
+  const hourCount = hours ? Number(hours[1]) : 0;
+  const minuteCount = minutes ? Number(minutes[1]) : 0;
+  const parts = [];
+  if (dayCount) parts.push(`${dayCount}d`);
+  if (hourCount) parts.push(`${hourCount}h`);
+  if (minuteCount) parts.push(`${minuteCount}m`);
+  return {
+    totalMinutes: dayCount * 24 * 60 + hourCount * 60 + minuteCount,
+    label: parts.length ? parts.join(" ") : "0m",
+  };
+}
+
+function parseDashboard(html, host) {
   const text = normalizeDashboard(html);
   if (!/账户余额/.test(text)) throw new Error("dashboard content is missing");
+  const format = (value) => host.format.number(value);
   const balance = dashboardNumber(text, /账户余额\s*¥?\s*([\d,]+(?:\.\d+)?)/, "balance");
-  const requestBalance = dashboardNumber(text, /请求次数余额\s*([\d,]+)/, "request balance");
   const totalBilled = dashboardNumber(text, /累计计费次数\s*([\d,]+)/, "total billed requests");
   const monthlyBilled = dashboardNumber(text, /本月计费次数\s*([\d,]+)/, "monthly billed requests");
   const totalTokens = dashboardNumber(text, /Token\s*已用总数\s*([\d,]+)/i, "total tokens");
   const monthlyTokens = dashboardNumber(text, /Token\s*已用总数\s*[\d,]+\s*本月:\s*([\d,]+)/i, "monthly tokens");
+  const period = dashboardAllowance(text, /请求次数余额\s*([\d,]+)\s*\/\s*([\d,]+)/, "period allowance");
+  const month = dashboardAllowance(text, /本周期剩余\s*([\d,]+)\s*\/\s*([\d,]+)\s*次/, "monthly allowance");
+  const countdown = dashboardCountdown(text);
   const concurrency = text.match(/并发数\s*([\d,]+)\s*\/\s*([\d,]+)/);
-  const cycle = text.match(/本周期剩余\s*([\d,]+)\s*\/\s*([\d,]+)\s*次/);
-  if (!cycle) throw new Error("missing cycle allowance");
-  const remaining = Number(cycle[1].replace(/,/g, ""));
-  const limit = Number(cycle[2].replace(/,/g, ""));
-  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0 || remaining < 0 || remaining > limit) {
-    throw new Error("invalid cycle allowance");
-  }
-  const reset = text.match(/((?:\d+\s*天)?\s*(?:\d+\s*小时)?\s*(?:\d+\s*分钟)?\s*)后重置/);
-  const period = text.match(/每期\s*([\d,]+)\s*次/);
-  const monthlyLimit = text.match(/每月\s*([\d,]+)\s*次/);
   const expiry = text.match(/有效期至[:：]\s*([\d.-]+)/);
-  const used = limit - remaining;
-  const rows = [
-    { label: "Account balance", value: `¥${balance.toFixed(2)}` },
-    { label: "Request balance", value: String(requestBalance) },
-    { label: "Total billed requests", value: String(totalBilled) },
-    { label: "Billed requests this month", value: String(monthlyBilled) },
-    { label: "Total tokens", value: String(totalTokens) },
-    { label: "Tokens this month", value: String(monthlyTokens) },
-    { label: "Cycle remaining", value: `${remaining} / ${limit}` },
+  const periodUsed = period.limit - period.remaining;
+  const monthUsed = month.limit - month.remaining;
+
+  // `primary` is the 5-hour period: it drives the menu bar / Overview percent by default.
+  const primary = {
+    usedPercent: host.pct(periodUsed, period.limit),
+    windowMinutes: PERIOD_WINDOW_MINUTES,
+    resetDescription: `${format(period.remaining)} / ${format(period.limit)} left`,
+  };
+  if (countdown) {
+    primary.resetsAt = host.date.unixMillis(host.date.nowMillis() + countdown.totalMinutes * 60000);
+    primary.resetDescription += ` · resets in ${countdown.label}`;
+  }
+
+  const windowRows = [
+    { label: "5-hour period", value: `${format(periodUsed)} / ${format(period.limit)} used` },
+    { label: "This month", value: `${format(monthUsed)} / ${format(month.limit)} used` },
   ];
-  if (period) rows.push({ label: "Per-period allowance", value: period[1] });
-  if (monthlyLimit) rows.push({ label: "Monthly allowance", value: monthlyLimit[1] });
-  if (reset) rows.push({ label: "Reset", value: `${reset[1].trim()} remaining` });
-  if (expiry) rows.push({ label: "Plan expiry", value: expiry[1] });
-  if (concurrency) rows.push({ label: "Concurrency", value: `${concurrency[1]} / ${concurrency[2]}` });
+  if (countdown) windowRows.push({ label: "Period resets", value: `${countdown.label} left` });
+  // The dashboard prints no monthly reset time; the plan follows the calendar month.
+  windowRows.push({ label: "Monthly reset", value: "Calendar month" });
+
+  const accountRows = [
+    { label: "Account balance", value: `¥${balance.toFixed(2)}` },
+    { label: "Total billed requests", value: format(totalBilled) },
+    { label: "Billed requests this month", value: format(monthlyBilled) },
+    { label: "Total tokens", value: format(totalTokens) },
+    { label: "Tokens this month", value: format(monthlyTokens) },
+  ];
+  if (concurrency) accountRows.push({ label: "Concurrency", value: `${concurrency[1]} / ${concurrency[2]}` });
+  if (expiry) accountRows.push({ label: "Plan expiry", value: expiry[1] });
+
   return {
-    primary: {
-      usedPercent: pct(used, limit),
-      resetDescription: `${remaining} / ${limit}${reset ? ` · ${reset[1].trim()} remaining` : ""}`,
+    primary,
+    // `secondary` is the monthly allowance; it is user-selectable as the menu bar metric.
+    secondary: {
+      usedPercent: host.pct(monthUsed, month.limit),
+      windowMinutes: MONTH_WINDOW_MINUTES,
+      resetDescription: "Resets with the calendar month",
     },
-    details: [{ title: "Shanhe dashboard", rows }],
+    details: [
+      { title: "Usage windows", rows: windowRows },
+      { title: "Account", rows: accountRows },
+    ],
     identity: { loginMethod: "Browser session" },
     dataConfidence: "exact",
   };
@@ -67,6 +123,7 @@ function parseDashboard(html, pct) {
 defineProvider({
   id: "shanhe",
   name: "Shanhe",
+  icon: { monogram: "SH", tint: "#3684DC" },
   endpoints: ["https://api.0ki.cn"],
   settings: [],
   capabilities: ["browser-cookies", "http-status"],
@@ -95,8 +152,7 @@ defineProvider({
       if (response.status >= 500) throw ctx.fail.providerUnavailable(`Shanhe dashboard returned HTTP ${response.status}.`);
       if (response.status !== 200) throw ctx.fail.apiFailure(`Shanhe dashboard returned HTTP ${response.status}.`);
       try {
-        const snapshot = parseDashboard(response.bodyText, ctx.pct);
-        return snapshot;
+        return parseDashboard(response.bodyText, ctx);
       } catch (error) {
         if (/登录|login/i.test(response.bodyText) && !/账户余额/.test(response.bodyText)) {
           ctx.browser.rejectCookie(domain, session);
