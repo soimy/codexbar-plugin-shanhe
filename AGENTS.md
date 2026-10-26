@@ -18,12 +18,12 @@ Third-party CodexBar user plugin for Shanhe (`api.0ki.cn`). The plugin is one Ja
 
 Two windows, and they come from **different places on the page** — this is the part that is easy to get wrong:
 
-- `primary` — the 5-hour period (`PERIOD_WINDOW_MINUTES = 300`). The remaining count is the bare `请求次数余额` stat (`<p class="stat-value">1,796</p>`); the cap is `每期1,800次` in the VIP block. `resetsAt` comes from the VIP block's `…后重置` countdown, which is relative to the refresh, so it is resolved at parse time.
-- `secondary` — the calendar month, from the VIP block's `每月30,000次` cap and `本周期剩余 23,941 / 30,000 次`, with `MONTH_WINDOW_MINUTES = 43200`. The page prints no monthly reset time, so it reports `resetDescription` instead of an invented `resetsAt`.
+- `primary` — the 5-hour period (`PERIOD_WINDOW_MINUTES = 300`), titled `5小时周期`. The remaining count is the bare `请求次数余额` stat (`<p class="stat-value">1,796</p>`); the cap is `每期1,800次` in the VIP block. `resetsAt` comes from the VIP block's `…后重置` countdown, which is relative to the refresh, so it is resolved at parse time.
+- `secondary` — the calendar month, from the VIP block's `每月30,000次` cap and `本周期剩余 23,941 / 30,000 次`, titled `本月`, with `MONTH_WINDOW_MINUTES = 43200`. The page prints no monthly reset time, so `resetsAt` is derived as the start of the vendor's next calendar month — 00:00 Asia/Shanghai (`VENDOR_UTC_OFFSET_MINUTES`), computed with the integer civil-date helpers, never the user's zone. That is what lets the card show a real day count instead of a wording.
 
 `dashboardAllowances` reads `每期 … 每月 … 本周期剩余 …` as **one anchored block** (`[\s\S]{0,300}?` between them) rather than three independent searches: the store page and upgrade cards list other tiers' numbers, and only the block keeps the right ones together. The period balance is deliberately allowed to exceed its cap — a top-up purchase leaves `请求次数余额` above `每期` — so the used count clamps at 0 instead of failing the fetch. Do not "tighten" that into a rejection.
 
-Because `primary` and `secondary` are both set, CodexBar's menu bar metric picker offers Primary, Secondary and Average for this provider; `Automatic` follows `primary`. Never move the monthly window into `extraWindows`: user-plugin cards render only `primary`/`secondary`/`tertiary`, and the bar titles are hard-coded by the host.
+Because `primary` and `secondary` are both set, CodexBar's menu bar metric picker offers Primary, Secondary and Average for this provider; `Automatic` follows `primary`. Never move the monthly window into `extraWindows`: user-plugin cards render only `primary`/`secondary`/`tertiary`. Window names come from the snapshot's `title` (CodexBar 0.81+; older hosts ignore it and fall back to `Primary`/`Secondary`).
 
 ### Recent-usage chart
 
