@@ -36,6 +36,8 @@ private struct Options {
     var status = 200
     var attempts = 3
     var expectOK = false
+    /// Real network + the real Chrome cookie broker, instead of the canned stub transport.
+    var live = false
 }
 
 private let usageText = """
@@ -46,6 +48,7 @@ Usage: repro [plugin.js] [mode] [body.html] [flags]
   body.html   response body to serve (default: fixtures/dashboard.html, else a login page)
 
 Flags:
+  --live             hit the real vendor with the real Chrome cookie broker (no stub transport)
   --records <path>   body served for the optional user_api.php request (default: fixtures/records.json)
   --records-delay <s>  seconds the optional request takes (default: 0; the real page takes ~0.6)
   --status <code>    HTTP status the stub transport returns (default: 200)
@@ -72,6 +75,8 @@ private func parse(_ arguments: [String]) -> Options {
         switch argument {
         case "--expect-ok":
             options.expectOK = true
+        case "--live":
+            options.live = true
         case "--records":
             index += 1
             guard index < arguments.count else { fail("--records needs a path") }
@@ -175,21 +180,25 @@ private struct PluginRepro {
         let records = try self.recordsBody(for: options)
         let engine = ProcessInfo.processInfo.environment["CODEXBAR_PLUGIN_ENGINE"]?.lowercased() ?? "default (QuickJS)"
         print("engine: \(engine)")
-        print("mode:   \(options.mode.rawValue) — \(options.mode.summary)")
+        print("mode:   \(options.live ? "live — real transport + real Chrome cookies" : options.mode.summary)")
         print("status: \(options.status)")
         print("records: \(options.recordsPath ?? (records == nil ? "none (chart dropped)" : "fixtures/records.json"))")
         if options.recordsDelaySeconds > 0 { print("records delay: \(options.recordsDelaySeconds)s") }
 
         let stateDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("codexbar-plugin-repro", isDirectory: true)
+        // `--live` uses the app's own transport and Chrome cookie broker, so the plugin sees exactly
+        // what it sees in the app: real gzip handling, real redirects, the real session header.
         let loader = UserProviderPluginLoader(
             providersDirectory: stateDirectory.appendingPathComponent("providers", isDirectory: true),
             cacheDirectory: stateDirectory.appendingPathComponent("cache", isDirectory: true),
-            transport: StubTransport(
-                body: body,
-                records: records,
-                status: options.status,
-                recordsDelaySeconds: options.recordsDelaySeconds))
+            transport: options.live
+                ? nil
+                : StubTransport(
+                    body: body,
+                    records: records,
+                    status: options.status,
+                    recordsDelaySeconds: options.recordsDelaySeconds))
         let plugin = try loader.load(fileURL: URL(fileURLWithPath: options.pluginPath))
         print("loaded: \(plugin.manifest.id.rawValue) — \(plugin.manifest.name)")
         print("  capabilities:  \(plugin.manifest.capabilities.map(\.rawValue).joined(separator: ", "))")
@@ -203,6 +212,11 @@ private struct PluginRepro {
 
         let instanceResolver: ProviderPluginRuntime.InstanceCookieResolver = { _, domain in
             trace("cookieSession \(domain)")
+            if options.live {
+                let browserDetection = BrowserDetection()
+                return try await UserProviderPluginCookieBroker.resolver(browserDetection: browserDetection)(
+                    plugin.manifest.id, domain)
+            }
             switch options.mode {
             case .session: return "session=fixture"
             case .missing: throw ProviderPluginError.secretAccess("no browser session cookies were found")
