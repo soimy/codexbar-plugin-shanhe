@@ -212,8 +212,11 @@ function parseDashboard(html, host) {
   const periodUsed = Math.max(0, allowances.perPeriod - periodRemaining);
   const monthUsed = allowances.monthLimit - allowances.monthRemaining;
 
-  // `primary` is the 5-hour period: it drives the menu bar / Overview percent by default.
+  // `primary` is the 5-hour period: it drives the menu bar / Overview percent by default. The window
+  // `title` replaces the host's generic "Primary"/"Secondary" card labels (CodexBar 0.81+; older hosts
+  // ignore the unknown field).
   const primary = {
+    title: "5小时周期",
     usedPercent: host.pct(periodUsed, allowances.perPeriod),
     windowMinutes: PERIOD_WINDOW_MINUTES,
     resetDescription: `${format(periodRemaining)} / ${format(allowances.perPeriod)} 剩余`,
@@ -249,6 +252,7 @@ function parseDashboard(html, host) {
     primary,
     // `secondary` is the monthly allowance; it is user-selectable as the menu bar metric.
     secondary: {
+      title: "本月",
       usedPercent: host.pct(monthUsed, allowances.monthLimit),
       windowMinutes: MONTH_WINDOW_MINUTES,
       resetDescription: "随自然月重置",

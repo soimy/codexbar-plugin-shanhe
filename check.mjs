@@ -47,6 +47,8 @@ if (result.primary.windowMinutes !== 300) throw new Error(`primary windowMinutes
 if (result.primary.resetsAt?.getTime() !== NOW_MILLIS + (3 * 60 + 48) * 60 * 1000) throw new Error("primary resetsAt");
 if (!close(result.secondary.usedPercent, (30000 - 23941) / 30000 * 100)) throw new Error(`secondary usedPercent ${result.secondary.usedPercent}`);
 if (result.secondary.windowMinutes !== 43200) throw new Error(`secondary windowMinutes ${result.secondary.windowMinutes}`);
+// CodexBar 0.81+ shows these in place of the generic Primary/Secondary card labels.
+if (result.primary.title !== "5小时周期" || result.secondary.title !== "本月") throw new Error("window titles");
 if (result.details[0].title !== "用量窗口" || result.details[1].title !== "账户") throw new Error("detail sections");
 if (row(0, "5小时周期")?.value !== "4 / 1,800") throw new Error("period row");
 if (row(0, "本月")?.value !== "6,059 / 30,000") throw new Error("monthly row");
