@@ -3,6 +3,11 @@
 const PERIOD_WINDOW_MINUTES = 300;
 // 30 days, the monthly-window convention the bundled providers use.
 const MONTH_WINDOW_MINUTES = 43200;
+// The vendor is a Chinese service, so its "本月" allowance rolls over at 00:00 Asia/Shanghai. The page
+// prints no monthly reset time, so the boundary is derived from that fixed offset: the user's own zone
+// (`ctx.env.timeZone`) is not the vendor's.
+const VENDOR_UTC_OFFSET_MINUTES = 8 * 60;
+const MINUTES_PER_DAY = 24 * 60;
 // The recent-usage chart reads the request log. One page of 1,500 records measured 560 KB (373 bytes
 // each) and about 28 hours of history on this account: under the host's 1 MiB response cap.
 //
@@ -106,6 +111,16 @@ function civilFromDays(days) {
   const day = dayOfYear - Math.floor((153 * monthIndex + 2) / 5) + 1;
   const month = monthIndex < 10 ? monthIndex + 3 : monthIndex - 9;
   return { year: month <= 2 ? year + 1 : year, month, day };
+}
+
+// Epoch millis for the start of the vendor's next calendar month (see VENDOR_UTC_OFFSET_MINUTES).
+function nextVendorMonthStartMillis(nowMillis) {
+  const vendorDay = Math.floor(nowMillis / (MINUTES_PER_DAY * 60000) + VENDOR_UTC_OFFSET_MINUTES / MINUTES_PER_DAY);
+  const { year, month } = civilFromDays(vendorDay);
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  return daysFromCivil(nextYear, nextMonth, 1) * MINUTES_PER_DAY * 60000 -
+    VENDOR_UTC_OFFSET_MINUTES * 60000;
 }
 
 function pad2(value) {
@@ -228,7 +243,8 @@ function parseDashboard(html, host) {
 
   // Display labels are written in Chinese directly. The host's Localizable.strings lookup does not
   // apply to user-plugin detail labels (verified against the app: "Window"/"Balance" stay English),
-  // so reusing catalog keys buys nothing; the dashboard is a Chinese product anyway.
+  // so reusing catalog keys buys nothing; the dashboard is a Chinese product anyway. The card's own
+  // window rows show percentages only, so this section keeps the absolute counts.
   const windowRows = [
     { label: "5小时周期", value: `${format(periodUsed)} / ${format(allowances.perPeriod)}` },
     { label: "本月", value: `${format(monthUsed)} / ${format(allowances.monthLimit)}` },
@@ -255,7 +271,8 @@ function parseDashboard(html, host) {
       title: "本月",
       usedPercent: host.pct(monthUsed, allowances.monthLimit),
       windowMinutes: MONTH_WINDOW_MINUTES,
-      resetDescription: "随自然月重置",
+      // Derived, not printed by the page: the card then shows the real day count instead of a wording.
+      resetsAt: host.date.unixMillis(nextVendorMonthStartMillis(host.date.nowMillis())),
     },
     details: [
       { title: "用量窗口", rows: windowRows },
