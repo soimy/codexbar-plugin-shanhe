@@ -5,6 +5,7 @@ Third-party CodexBar user plugin for Shanhe (`api.0ki.cn`). The plugin is one Ja
 ## Layout
 
 - `shanhe.js` — the entire plugin: `normalizeDashboard` / `dashboardNumber` / `dashboardAllowances` / `dashboardCountdown` / `parseDashboard` for the dashboard, `daysFromCivil` / `civilFromDays` / `logHour` / `hourLabel` / `recentUsage` for the chart, plus exactly one `defineProvider({...})` call. No imports, no modules, no shared state outside the fetch.
+- `shanhe-cli.js` — standalone manual-Cookie companion, ID `shanhe-cli`, for CodexBar CLI 0.83.0. The helpers preceding the manifest must match `shanhe.js` byte for byte (checked by `check.mjs`); update both copies together. Its manifest uses a secure `COOKIE` setting and `auth: { type: "header", header: "Cookie", secret: "COOKIE" }`. The host injects authentication into both requests; no `ctx.browser`, `browser-cookies`, or `cookieDomains`. Missing credentials fail in the host; rejected sessions prompt the user to replace `CODEXBAR_PLUGIN_SHANHE_CLI_COOKIE`.
 - `check.mjs` — the only check. Loads `shanhe.js` into `node:vm` with a stub `ctx`, serves `fixtures/dashboard.html` as the required response and `fixtures/records.json` as the optional one, and asserts the mapped snapshot, the chart, and the degraded paths.
 - `fixtures/dashboard.html` — verbatim capture of the dashboard's stat grid and VIP block; it is the parser's contract. Replace it with a fresh capture, never with a description of the page.
 - `fixtures/records.json` — a contiguous excerpt of a real `get_usage_records` response (210 records, 2026-10-11 14:00–19:59 local; the vendor answers with compact JSON, so the excerpt is byte-identical apart from the shortened list). It carries the real envelope and the real 15:00–17:59 silence, which is what makes the zero-fill and the partial-hour rule testable. Replace it with a fresh capture the same way.
@@ -81,7 +82,7 @@ Snapshots are validated, not truncated: at most 8 detail sections, 24 rows per s
 node check.mjs
 ```
 
-Run it after every edit to `shanhe.js` or the fixture, and expect `shanhe plugin syntax and dashboard parser checks passed`. It is the whole test suite: no test framework, no `package.json`, no npm install. Do not add dependencies or tooling unless the change genuinely needs them.
+Run it after every edit to either plugin or the fixture, and expect `shanhe plugin syntax and dashboard parser checks passed`. It checks both plugins, the mirrored helpers, and CLI error classification without a browser API. It is the whole test suite: no test framework, no `package.json`, no npm install. Do not add dependencies or tooling unless the change genuinely needs them.
 
 `check.mjs` fakes the host, so it cannot catch a host-side contract the way the app does. When a change depends on runtime behaviour (engine APIs, cookie sessions, snapshot limits) or the app disagrees with the check, reproduce it with the real engine instead:
 
@@ -94,6 +95,8 @@ CODEXBAR_SOURCE=/path/to/CodexBar tools/repro/repro.sh --expect-ok
 Copy `shanhe.js` to `~/.config/codexbar/providers/shanhe.js` and refresh CodexBar (or use **Settings → Plugins → Install…**). This machine's installed copy is expected to match the repo file byte for byte — check with `diff` after editing, and sign in to `https://api.0ki.cn/dashboard.php` in Chrome when the plugin reports an expired session.
 
 **After every functional change to `shanhe.js`, copy it to `~/.config/codexbar/providers/shanhe.js` before finishing** (outside the sandbox workspace, so this may need an elevated file operation), then confirm with `diff`.
+
+After a functional change to `shanhe-cli.js`, likewise copy it to `~/.config/codexbar/providers/shanhe-cli.js` and confirm with `diff`. Use a copy: the 0.83.0 loader rejects symlinks as non-regular files. The desktop and CLI variants may be installed independently. See `README.md` for the manual-Cookie environment variable and interactive first-fetch approval; never commit or log an actual Cookie.
 
 ## Commits
 
