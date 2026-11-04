@@ -1,0 +1,195 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["browser-cookie3==0.20.1"]
+# ///
+"""Import a signed-in Chrome/Chromium Shanhe session into CodexBar CLI."""
+
+import argparse
+import contextlib
+import fcntl
+import http.cookiejar
+import io
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+HOST = "api.0ki.cn"
+URL = f"https://{HOST}/dashboard.php"
+PROVIDER = "shanhe-cli"
+SECRET_ENV = "CODEXBAR_PLUGIN_SHANHE_CLI_COOKIE"
+
+
+class LoginError(Exception):
+    pass
+
+
+def config_path(environ, home):
+    """Match CodexBar 0.83's config resolution, including the legacy fallback."""
+    override = environ.get("CODEXBAR_CONFIG", "").strip()
+    if override:
+        return Path(override).expanduser().absolute()
+    xdg = Path(environ.get("XDG_CONFIG_HOME", "").strip()).expanduser()
+    if xdg.is_absolute():
+        return xdg / "codexbar/config.json"
+    default = home / ".config/codexbar/config.json"
+    legacy = home / ".codexbar/config.json"
+    return legacy if not default.exists() and legacy.exists() else default
+
+
+def cookie_file(browser, profile):
+    if not profile or profile != Path(profile).name or profile in (".", ".."):
+        raise LoginError("--profile 应为配置目录名，例如 Default 或 'Profile 1'。")
+    if sys.platform == "darwin":
+        root = Path.home() / "Library/Application Support" / (
+            "Google/Chrome" if browser == "chrome" else "Chromium")
+    else:
+        root = Path.home() / ".config" / ("google-chrome" if browser == "chrome" else "chromium")
+    for relative in ("Cookies", "Network/Cookies"):
+        candidate = root / profile / relative
+        if candidate.is_file():
+            return candidate
+    raise LoginError("找不到浏览器 Cookie 文件，请检查 --browser 和 --profile。")
+
+
+def cookie_header(cookies):
+    # The library's SQL filter is a substring match. Enforce the exact host afterwards so
+    # sibling/lookalike sites cannot contribute credentials. CookieJar handles expiry/path order.
+    jar = http.cookiejar.CookieJar()
+    for cookie in cookies:
+        if cookie.domain.lstrip(".").lower() == HOST:
+            jar.set_cookie(cookie)
+    request = urllib.request.Request(URL)
+    jar.add_cookie_header(request)
+    header = request.get_header("Cookie", "")
+    if not header or any(ord(char) < 32 or ord(char) > 126 for char in header):
+        raise LoginError("未找到有效的 Shanhe Cookie，请先在所选浏览器配置中登录。")
+    return header
+
+
+def read_cookie(browser, profile):
+    path = cookie_file(browser, profile)
+    # Lazy import keeps the stdlib-only tests independent of uv/browser-cookie3.
+    import browser_cookie3
+
+    try:
+        # Do not forward library diagnostics: they may contain browser or credential data.
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            cookies = getattr(browser_cookie3, browser)(cookie_file=str(path), domain_name=HOST)
+        return cookie_header(cookies)
+    except LoginError:
+        raise
+    except Exception:
+        raise LoginError("无法读取或解密浏览器 Cookie，请解锁桌面密钥环后重试。") from None
+
+
+def validate_cookie(header, path):
+    env = dict(os.environ, CODEXBAR_CONFIG=str(path))
+    env[SECRET_ENV] = header  # Host override, never a command-line argument or persisted probe.
+    command = ["codexbar", "plugins", "fetch", PROVIDER, "--json"]
+    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=45)
+    if (result.returncode and "needs approval before network access" in result.stderr
+            and sys.stdin.isatty() and sys.stderr.isatty()):
+        # Let CodexBar show its native approval prompt; never manufacture an approval record.
+        result = subprocess.run(command, env=env, stdout=subprocess.PIPE, text=True, timeout=120)
+    if result.returncode:
+        message = result.stderr or ""
+        if "Plugin was not found" in message:
+            raise LoginError("请先将 shanhe-cli.js 复制到 ~/.config/codexbar/providers/。")
+        if "needs approval before network access" in message:
+            raise LoginError("首次授权需要交互式终端，请在终端中运行本工具。")
+        if "session expired" in message:
+            raise LoginError("浏览器中的 Shanhe 会话已过期，请重新登录后重试。")
+        raise LoginError("CodexBar 验证失败，请检查网络及浏览器登录状态；原配置未更新。")
+    try:
+        snapshot = json.loads(result.stdout)
+        if not snapshot.get("primary") or not snapshot.get("secondary"):
+            raise ValueError
+    except (ValueError, AttributeError):
+        raise LoginError("CodexBar 未返回完整的 Shanhe 额度；原配置未更新。") from None
+
+
+def default_config(path):
+    result = subprocess.run(
+        ["codexbar", "config", "dump", "--json"],
+        env=dict(os.environ, CODEXBAR_CONFIG=str(path)), capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        raise LoginError("无法读取 CodexBar 默认配置；原配置未更新。")
+    return json.loads(result.stdout)
+
+
+def save_cookie(path, header):
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Share CodexBar's lock inode, read under the lock, and atomically publish a private file.
+    # Preserve every other provider and unknown field, including future config data.
+    descriptor = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise LoginError("配置锁文件不属于当前用户或不是普通文件；原配置未更新。")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if path.is_symlink():
+            raise LoginError("配置文件是符号链接，请用 CODEXBAR_CONFIG 指定实际配置文件。")
+        raw = path.read_text() if path.exists() else ""
+        data = json.loads(raw) if raw.strip() else default_config(path)
+        if not isinstance(data, dict) or data.get("version") != 1:
+            raise LoginError("配置格式不受支持；原配置未更新。")
+        providers = data.setdefault("providers", [])
+        if not isinstance(providers, list) or any(not isinstance(p, dict) for p in providers):
+            raise LoginError("供应商配置格式不正确；原配置未更新。")
+        matches = [p for p in providers if p.get("id") == PROVIDER]
+        if len(matches) > 1:
+            raise LoginError("配置中有重复的 shanhe-cli 条目；原配置未更新。")
+        entry = matches[0] if matches else {"id": PROVIDER}
+        secrets = entry.get("pluginSecrets")
+        if secrets is None:
+            secrets = {}
+        if not isinstance(secrets, dict):
+            raise LoginError("插件凭据格式不正确；原配置未更新。")
+        entry["pluginSecrets"] = {**secrets, "COOKIE": header}
+        entry["enabled"] = True
+        if not matches:
+            providers.append(entry)
+        descriptor_tmp, temporary = tempfile.mkstemp(prefix=".shanhe-login-", dir=path.parent)
+        try:
+            with os.fdopen(descriptor_tmp, "w") as output:
+                json.dump(data, output, ensure_ascii=False, indent=2)
+                output.write("\n")
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    finally:
+        os.close(descriptor)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="从浏览器导入 Shanhe 登录态，验证成功后保存到 CodexBar CLI。")
+    parser.add_argument("--browser", choices=("chrome", "chromium"), default="chrome")
+    parser.add_argument("--profile", default="Default", help="浏览器配置目录名，默认 Default")
+    args = parser.parse_args(argv)
+    try:
+        path = config_path(os.environ, Path.home())
+        header = read_cookie(args.browser, args.profile)
+        print("已读取浏览器登录态，正在验证 Shanhe…", flush=True)
+        validate_cookie(header, path)
+        save_cookie(path, header)
+        print("Shanhe 登录态已更新。现在可运行 codexbar plugins fetch shanhe-cli。")
+        if os.environ.get(SECRET_ENV):
+            print(f"当前终端的环境变量会覆盖已保存配置；请执行 unset {SECRET_ENV}。")
+        return 0
+    except (LoginError, OSError, ValueError, subprocess.SubprocessError) as error:
+        # Never print arbitrary exceptions: JSON decode, subprocess, or library errors can carry secrets.
+        print(str(error) if isinstance(error, LoginError) else "导入失败，原 Cookie 配置未更新；请检查配置、网络和 codexbar 命令。", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

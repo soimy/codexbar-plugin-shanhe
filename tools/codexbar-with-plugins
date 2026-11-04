@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Merge enabled user plugins into JSON usage for omarchy-codexbar's codexbarBin."""
+
+from concurrent.futures import ThreadPoolExecutor
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+deadline = None
+
+
+def cli(arguments, timeout=25):
+    # Resolve the real CLI, never invoke this adapter recursively or send secrets in argv.
+    remaining = timeout if deadline is None else min(timeout, deadline - time.monotonic())
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired("codexbar", timeout)
+    return subprocess.run(["codexbar", *arguments], stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, timeout=remaining)
+
+
+def failure(provider, message):
+    return {"provider": provider, "source": "plugin" if provider != "cli" else "cli",
+            "error": {"kind": "provider", "code": 1, "message": message}}
+
+
+def enabled_plugins():
+    inventory = cli(["config", "providers", "--json"], timeout=5)
+    installed = cli(["plugins", "list"], timeout=5)
+    if inventory.returncode or installed.returncode:
+        raise ValueError("Plugin discovery failed")
+    available = {line.split("\t")[0] for line in installed.stdout.splitlines()
+                 if "\t" in line and not line.startswith("error\t")}
+    return [p["provider"] for p in json.loads(inventory.stdout)
+            if p.get("enabled") is True and p.get("provider") in available
+            and re.fullmatch(r"[a-z0-9-]{1,64}", p["provider"])]
+
+
+def fetch_plugin(provider):
+    try:
+        # Captured stderr/stdin keep background polling from prompting or logging credentials.
+        result = cli(["plugins", "fetch", provider, "--json"])
+        if result.returncode == 0:
+            snapshot = json.loads(result.stdout)
+            if isinstance(snapshot, dict) and any(snapshot.get(w) for w in ("primary", "secondary", "tertiary", "details")):
+                return {"provider": provider, "source": "plugin", "usage": snapshot}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return failure(provider, f"Plugin fetch failed; run codexbar plugins fetch {provider} in a terminal.")
+
+
+def usage(arguments):
+    # Built-ins and plugins refresh independently, within the panel's 30-second watchdog.
+    global deadline
+    deadline = time.monotonic() + 25
+    discovery_failed = False
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        builtin_future = pool.submit(cli, arguments)
+        try:
+            plugin_ids = enabled_plugins()
+        except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+            plugin_ids = []
+            discovery_failed = True
+        pending = [pool.submit(fetch_plugin, provider) for provider in plugin_ids]
+        try:
+            builtin = builtin_future.result()
+            records = json.loads(builtin.stdout)
+            if not isinstance(records, list):
+                raise ValueError("Invalid usage output")
+            failed = builtin.returncode != 0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            records = [failure("cli", "CodexBar usage failed.")]
+            failed = True
+        # Avoid duplicates if a future CodexBar version starts including user plugins itself.
+        seen = {record.get("provider") for record in records if isinstance(record, dict)}
+        if discovery_failed:
+            records.append(failure("plugins", "User plugin discovery failed."))
+            failed = True
+        for future in pending:
+            record = future.result()
+            if record["provider"] not in seen:
+                records.append(record)
+                seen.add(record["provider"])
+                failed = failed or "error" in record
+    print(json.dumps(records, ensure_ascii=False))
+    return 1 if failed else 0
+
+
+def main(arguments=None):
+    arguments = sys.argv[1:] if arguments is None else arguments
+    # The panel requests unfiltered usage JSON. Keep all other CLI commands untouched,
+    # including version/cost and explicitly selected providers or account/source options.
+    panel_flags = {"usage", "--format", "json", "--web-timeout", "--pretty", "--no-color", "--json"}
+    has_json = "--json" in arguments or any(
+        arguments[i:i + 2] == ["--format", "json"] for i in range(len(arguments)))
+    is_panel_usage = arguments and arguments[0] == "usage" and has_json
+    if is_panel_usage and all(a in panel_flags or a.isdecimal() for a in arguments):
+        return usage(arguments)
+    os.execvp("codexbar", ["codexbar", *arguments])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

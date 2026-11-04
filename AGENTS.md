@@ -1,11 +1,13 @@
 # Repository Guidelines
 
-Third-party CodexBar user plugin for Shanhe (`api.0ki.cn`). The plugin is one JavaScript file with no build step, no dependencies, no CI; the only extra tooling is the optional real-engine harness in `tools/repro/`.
+Third-party CodexBar user plugins for Shanhe (`api.0ki.cn`). Each plugin is a standalone JavaScript file with no build step, no dependencies, no CI. Optional tools are the login helper and the real-engine harness in `tools/repro/`.
 
 ## Layout
 
 - `shanhe.js` — the entire plugin: `normalizeDashboard` / `dashboardNumber` / `dashboardAllowances` / `dashboardCountdown` / `parseDashboard` for the dashboard, `daysFromCivil` / `civilFromDays` / `logHour` / `hourLabel` / `recentUsage` for the chart, plus exactly one `defineProvider({...})` call. No imports, no modules, no shared state outside the fetch.
 - `shanhe-cli.js` — standalone manual-Cookie companion, ID `shanhe-cli`, for CodexBar CLI 0.83.0. The helpers preceding the manifest must match `shanhe.js` byte for byte (checked by `check.mjs`); update both copies together. Its manifest uses a secure `COOKIE` setting and `auth: { type: "header", header: "Cookie", secret: "COOKIE" }`. The host injects authentication into both requests; no `ctx.browser`, `browser-cookies`, or `cookieDomains`. Missing credentials fail in the host; rejected sessions prompt the user to replace `CODEXBAR_PLUGIN_SHANHE_CLI_COOKIE`.
+- `tools/shanhe-login` — optional executable `uv` script with a pinned `browser-cookie3` dependency, separate from the sandboxed plugins. Imports Chrome/Chromium cookies for `api.0ki.cn`, verifies them using the real CLI plugin via an environment override, then updates only `pluginSecrets.COOKIE` and enablement in the resolved CodexBar config. Uses CodexBar's `.lock`, preserves other fields, writes atomically with mode `0600`, and never prints secrets. Native CLI approval stays interactive; never write approval records directly. `tools/check_login.py` covers config preservation, failed imports, header scope and credential handling offline with the Python standard library.
+- `tools/codexbar-with-plugins` — optional stdlib-only Python adapter for omarchy-codexbar's `codexbarBin` setting. CodexBar 0.83's normal `usage` omits user plugins. This adapter discovers enabled installed plugins, fetches their snapshots concurrently, wraps them in `{provider, source, usage}` envelopes, and merges them with built-in usage JSON. Other CLI commands pass through untouched. Errors are isolated and raw stderr is never emitted; total subprocess time is bounded below the widget watchdog. Never install this adapter under the name `codexbar`. `tools/check_omarchy_adapter.py` checks merging, discovery, passthrough and failures. Keep an installed `~/.local/bin/codexbar-with-plugins` copy in sync after edits; verify the live widget with `omarchy shell local.codexbar status`.
 - `check.mjs` — the only check. Loads `shanhe.js` into `node:vm` with a stub `ctx`, serves `fixtures/dashboard.html` as the required response and `fixtures/records.json` as the optional one, and asserts the mapped snapshot, the chart, and the degraded paths.
 - `fixtures/dashboard.html` — verbatim capture of the dashboard's stat grid and VIP block; it is the parser's contract. Replace it with a fresh capture, never with a description of the page.
 - `fixtures/records.json` — a contiguous excerpt of a real `get_usage_records` response (210 records, 2026-10-11 14:00–19:59 local; the vendor answers with compact JSON, so the excerpt is byte-identical apart from the shortened list). It carries the real envelope and the real 15:00–17:59 silence, which is what makes the zero-fill and the partial-hour rule testable. Replace it with a fresh capture the same way.
@@ -83,6 +85,10 @@ node check.mjs
 ```
 
 Run it after every edit to either plugin or the fixture, and expect `shanhe plugin syntax and dashboard parser checks passed`. It checks both plugins, the mirrored helpers, and CLI error classification without a browser API. It is the whole test suite: no test framework, no `package.json`, no npm install. Do not add dependencies or tooling unless the change genuinely needs them.
+
+For login-helper changes, also run `python3 tools/check_login.py`. Validate real imports with `./tools/shanhe-login` and `codexbar plugins fetch shanhe-cli` on an authorized signed-in profile; never print or commit the imported Cookie. If `~/.local/bin/shanhe-login` is installed, update that copy after changing the helper and confirm with `diff`.
+
+For adapter changes, run `python3 tools/check_omarchy_adapter.py` and verify that the widget's status includes both built-in and enabled user-plugin windows. Omarchy customization must follow the Omarchy skill; use the widget setting rather than modifying upstream widget code.
 
 `check.mjs` fakes the host, so it cannot catch a host-side contract the way the app does. When a change depends on runtime behaviour (engine APIs, cookie sessions, snapshot limits) or the app disagrees with the check, reproduce it with the real engine instead:
 
